@@ -1,0 +1,8 @@
+online-mode=false
+server-ip=127.0.0.1
+gamemode=creative
+difficulty=peaceful
+spawn-monsters=false
+enable-rcon=true
+rcon.port=25575
+rcon.password=
