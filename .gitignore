@@ -216,3 +216,16 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Minecraft Server
+mc_server/*
+!mc_server/start.sh
+!mc_server/start.bat
+!mc_server/server.properties.example
+
+# Java, Gradle, IDE
+.gradle/
+.idea/
+
+# Node
+node_modules/
