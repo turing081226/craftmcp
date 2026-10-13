@@ -1,0 +1,60 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'io.craftmcp'
+version = '0.1.0'
+
+repositories { mavenCentral() }
+java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
+application { mainClass = 'io.craftmcp.debugger.Main' }
+
+dependencies {
+    implementation 'com.google.code.gson:gson:2.13.2'
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.debug = true
+    options.debugOptions.debugLevel = 'source,lines,vars'
+    options.compilerArgs += ['--add-modules', 'jdk.jdi']
+}
+
+tasks.named('jar') {
+    archiveFileName = 'craftmcp-debugger-helper.jar'
+    manifest { attributes 'Main-Class': application.mainClass.get() }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'module-info.class'
+}
+
+def fixtureRoot = layout.projectDirectory.dir('../tests/fixtures/java_debuggee')
+tasks.register('compileDebuggee', JavaCompile) {
+    source = fileTree(fixtureRoot.dir('src')) { include '**/*.java' }
+    classpath = files()
+    destinationDirectory = layout.buildDirectory.dir('fixtures/debuggee')
+}
+
+tasks.register('compileDebuggeeWithoutVars', JavaCompile) {
+    source = fileTree(fixtureRoot.dir('src')) { include '**/*.java' }
+    classpath = files()
+    destinationDirectory = layout.buildDirectory.dir('fixtures/no-vars')
+    options.debugOptions.debugLevel = 'source,lines'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    dependsOn 'jar', 'compileDebuggee', 'compileDebuggeeWithoutVars'
+    jvmArgs '--add-modules', 'jdk.jdi'
+    systemProperty 'helper.jar', layout.buildDirectory.file('libs/craftmcp-debugger-helper.jar').get().asFile.absolutePath
+    systemProperty 'debuggee.classes', layout.buildDirectory.dir('fixtures/debuggee').get().asFile.absolutePath
+    systemProperty 'debuggee.noVars', layout.buildDirectory.dir('fixtures/no-vars').get().asFile.absolutePath
+    systemProperty 'debuggee.source', fixtureRoot.file('src/io/craftmcp/fixture/Calculator.java').asFile.absolutePath
+    testLogging { events 'passed', 'skipped', 'failed' }
+}
+
+tasks.named('wrapper') { gradleVersion = '8.14.3' }
