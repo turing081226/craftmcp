@@ -1,0 +1,26 @@
+{
+  "helper_jar": "debugger_helper/build/libs/craftmcp-debugger-helper.jar",
+  "java_executable": "java",
+  "evidence_dir": "data/debugger",
+  "ready_timeout": 5,
+  "request_timeout": 10,
+  "shutdown_timeout": 5,
+  "connect_timeout_ms": 5000,
+  "stop_timeout_ms": 10000,
+  "projects": {
+    "debugger-sample": {
+      "root": "plugin_template/debugger_sample",
+      "artifact_jar": "plugin_template/debugger_sample/build/libs/craftmcp-debugger-sample.jar"
+    }
+  },
+  "runtimes": {
+    "paper-local": {
+      "project_id": "debugger-sample",
+      "host": "127.0.0.1",
+      "port": 5005,
+      "jar": "mc_server/paper.jar",
+      "boot_id": null,
+      "server_version": "Paper 1.20.1 build 196 (configured; not observed)"
+    }
+  }
+}
