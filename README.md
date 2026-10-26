@@ -16,7 +16,21 @@
 | `mc_server/start.sh`                  | Linux/macOS 서버 실행 | 실행 권한 필요          |
 | `mc_server/start.bat`                 | Windows 서버 실행     | Windows 팀원용       |
 | `mc_server/server.properties.example` | 공통 서버 설정          | 실제 설정의 원본         |
-| `mcp_server/`                         | Python MCP 서버     | 추후 코드 및 의존성 파일 추가 |
-| `plugin_template/`                    | Paper 플러그인        | 추후 Gradle 프로젝트 구성 |
+| `mcp_server/`                         | Python MCP 서버     | 디버거 MCP 도구와 프로세스 통신 |
+| `plugin_template/`                    | Paper 플러그인        | 디버거 콘솔 재현 샘플 포함 |
 | `eval/`                               | 테스트 시나리오 및 평가 코드  | 실험 결과 평가          |
 | `data/`                               | 실험 데이터            | 대용량 데이터는 별도 관리 고려 |
+
+
+## 디버거 Python·MCP 실행
+
+분업안의 B 구현, A의 실제 Java 헬퍼 연결, Paper 검증 절차는
+[Python 디버거 안내](docs/debugger-python.md)를 따른다.
+
+```powershell
+uv sync --locked --python python
+.\.venv\Scripts\python.exe -m unittest discover -s tests/debugger_python -p "test_*.py" -v
+```
+
+모의 시험과 실제 JDI 시험을 구분한다. 실제 JDI 시험에는 A의 Java 빌드 산출물이 필요하며,
+Paper 전체 흐름은 `tests/debugger_python/probe_paper.py`로 별도 검증한다.

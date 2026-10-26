@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-13",
+  "python_tests": {
+    "passed": 27,
+    "skipped": 0,
+    "mock_unit_mcp": 20,
+    "real_jdi": 7
+  },
+  "paper_integration": {
+    "passed": true,
+    "target": "isolated workspace using supplied Paper JAR",
+    "version": "Paper 1.20.1 build 196",
+    "expected_damage": 10,
+    "normal_console_completion": true,
+    "normal_shutdown": true,
+    "evidence": "data/debugger/57ddd418e44d40d4afd610b23a7f9be2/paper-validation-summary.json"
+  },
+  "existing_server": {
+    "path": "C:/Users/yjkim/Desktop/mc_server",
+    "game_address": "127.0.0.1:25565",
+    "tcp_reachable_after_validation": true,
+    "jdwp_configured": false,
+    "modified": false,
+    "debugging_verified": false
+  },
+  "user_ide_host_verified": false
+}
