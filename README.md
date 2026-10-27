@@ -1,6 +1,7 @@
 # craftmcp
 마인크래프트 개발을 위한 MCP
 
+히히히
 ---
 
 ## 각 파일의 역할
@@ -15,8 +16,8 @@
 | `mc_server/start.sh`                  | Linux/macOS 서버 실행 | 실행 권한 필요          |
 | `mc_server/start.bat`                 | Windows 서버 실행     | Windows 팀원용       |
 | `mc_server/server.properties.example` | 공통 서버 설정          | 실제 설정의 원본         |
-| `mcp_server/`                         | Python MCP 서버     | 추후 코드 및 의존성 파일 추가 |
-| `plugin_template/`                    | Paper 플러그인        | 추후 Gradle 프로젝트 구성 |
+| `mcp_server/`                         | Python MCP 서버     | 디버거 MCP 도구와 프로세스 통신 |
+| `plugin_template/`                    | Paper 플러그인        | 디버거 콘솔 재현 샘플 포함 |
 | `eval/`                               | 테스트 시나리오 및 평가 코드  | 실험 결과 평가          |
 | `data/`                               | 실험 데이터            | 대용량 데이터는 별도 관리 고려 |
 
@@ -39,3 +40,22 @@ JVM 디버거를 사용하려면 먼저 Java 헬퍼를 빌드합니다.
 실제 디버거 설정은 `debugger.example.json`을 복사해 로컬 파일로 만든 뒤,
 공용 서버를 실행하는 프로세스에 `DEBUGGER_CONFIG=debugger.local.json` 환경변수를 지정합니다.
 `debugger.local.json`과 디버거 증거 파일은 저장소에 커밋하지 않습니다.
+
+## 디버거 Python·MCP 실행
+
+분업안의 B 구현, A의 실제 Java 헬퍼 연결, Paper 검증 절차는
+[Python 디버거 안내](docs/debugger-python.md)를 따른다.
+
+```powershell
+uv sync --locked --python python
+.\.venv\Scripts\python.exe -m unittest discover -s tests/debugger_python -p "test_*.py" -v
+```
+
+모의 시험과 실제 JDI 시험을 구분한다. 실제 JDI 시험에는 A의 Java 빌드 산출물이 필요하며,
+Paper 전체 흐름은 `tests/debugger_python/probe_paper.py`로 별도 검증한다.
+
+
+## 테스트
+
+환경 준비부터 모의 시험, 실제 JVM·Paper, RCON 검증까지는 [테스트 방법](docs/testing.md)을 따른다.
+루트의 `uv sync --locked --python python`으로 디버거와 RCON 의존성을 함께 설치한다.

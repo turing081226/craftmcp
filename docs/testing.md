@@ -123,7 +123,17 @@ java -cp debugger_helper/gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.Gr
 ```
 
 저장소 mc_server/start-debug.bat은 **그 스크립트가 있는 폴더**의 paper.jar와 server.properties를 사용한다.
-독립 디버거 시험을 위해 enable-rcon=false를 요구한다. 서버 파일과 EULA를 준비하고 기존 동일 포트 서버를 정상 종료한 뒤 사용한다.
+RCON은 server.properties 설정을 그대로 사용하며 JDWP와 함께 켤 수 있다. 서버 파일과 EULA를 준비하고 기존 동일 포트 서버를 정상 종료한 뒤 사용한다.
+
+Windows 배치 파일은 오류와 서버 프로세스 종료 후 pause로 창을 유지한다.
+파일 이름은 start-debug.bat이다. 다른 서버 폴더로 복사한 경우 수정한 최신 파일로 교체한다.
+서버를 실행하지 않고 필수 파일과 Java를 확인하려면 서버 폴더에서 다음을 실행한다.
+
+```powershell
+.\start-debug.bat --check --no-pause
+```
+
+자동화에서는 --no-pause로 대기를 끌 수 있다. --suspend는 JVM 시작부터 디버거 연결을 기다린다.
 
 샘플 JAR를 대상 서버 plugins/에 설치하고 서버를 시작한 다음 로컬 설정을 만든다.
 
@@ -150,7 +160,7 @@ craftdebug calculate probe-001 7 3
 
 ## 7. RCON 시험
 
-이 절은 RCON이 켜진 별도 시험 프로필에서 진행한다. 독립 디버거용 start-debug.bat은 RCON=false를 요구하므로 이 절과 설정이 다르다.
+이 절은 RCON이 켜진 시험 서버에서 진행한다. start-debug.bat도 enable-rcon=true 설정을 허용하므로 JDWP와 RCON을 함께 사용할 수 있다. 자동 Paper 검증 드라이버는 독립 시험을 위해 RCON=false를 사용한다.
 현재 RCON 코드는 localhost:25575로 접속한다. 실제 server.properties에서 enable-rcon=true와 비어 있지 않은 비밀번호를 설정해야 한다.
 
 MCP 서버의 비밀번호는 로컬 .env 또는 환경변수로 제공한다.

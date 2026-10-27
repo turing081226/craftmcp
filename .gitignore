@@ -223,6 +223,8 @@ __marimo__/
 mc_server/*
 !mc_server/start.sh
 !mc_server/start.bat
+!mc_server/start-debug.bat
+!mc_server/start-debug.sh
 !mc_server/server.properties.example
 
 # Java, Gradle, IDE
@@ -231,3 +233,14 @@ mc_server/*
 
 # Node
 node_modules/
+
+# Local debugger configuration and collected values
+/debugger.local*.json
+/data/debugger/
+
+# Local environment variants (keep shareable examples)
+.env.*
+!.env.example
+
+# Machine-specific validation report; regenerated locally
+/docs/debugger-python-validation.json

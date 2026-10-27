@@ -431,7 +431,5 @@ def deploy_plugin(plugin_name: str) -> str:
                 stage="deploy_plugin",
                 errors=[f"플러그인 배포에 실패했습니다: {error}"],
             )
-
-
 if __name__ == "__main__":
     mcp.run(transport="stdio")
