@@ -34,3 +34,9 @@ uv sync --locked --python python
 
 모의 시험과 실제 JDI 시험을 구분한다. 실제 JDI 시험에는 A의 Java 빌드 산출물이 필요하며,
 Paper 전체 흐름은 `tests/debugger_python/probe_paper.py`로 별도 검증한다.
+
+
+## 테스트
+
+환경 준비부터 모의 시험, 실제 JVM·Paper, RCON 검증까지는 [테스트 방법](docs/testing.md)을 따른다.
+루트의 `uv sync --locked --python python`으로 디버거와 RCON 의존성을 함께 설치한다.

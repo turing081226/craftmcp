@@ -3,7 +3,12 @@ name = "craftmcp"
 version = "0.1.0"
 description = "Minecraft development MCP tools"
 requires-python = ">=3.11,<3.14"
-dependencies = ["fastmcp==2.14.5"]
+dependencies = [
+    "fastmcp==2.14.5",
+    "mcrcon==0.7.0",
+    "mcp[cli]<2",
+    "python-dotenv>=1.0,<2",
+]
 
 [project.scripts]
 craftmcp-debugger = "mcp_server.debugger_app:main"

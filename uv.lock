@@ -199,10 +199,18 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
+    { name = "mcp", extra = ["cli"] },
+    { name = "mcrcon" },
+    { name = "python-dotenv" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "fastmcp", specifier = "==2.14.5" }]
+requires-dist = [
+    { name = "fastmcp", specifier = "==2.14.5" },
+    { name = "mcp", extras = ["cli"], specifier = "<2" },
+    { name = "mcrcon", specifier = "==0.7.0" },
+    { name = "python-dotenv", specifier = ">=1.0,<2" },
+]
 
 [[package]]
 name = "cronsim"
@@ -593,6 +601,18 @@ sdist = { url = "https://files.pythonhosted.org/packages/ba/93/0142dc84a666daf8a
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f5/f4/e58bc33317c92a0203664daaf00bf6f41166cc0149e5d6870a03f7cd004a/mcp-1.30.0-py3-none-any.whl", hash = "sha256:666edb5009503e1047c9d60346a756f94b261f05cc2625f23d41c728ffc484d0", size = 234581, upload-time = "2026-09-07T14:34:14.266Z" },
 ]
+
+[package.optional-dependencies]
+cli = [
+    { name = "python-dotenv" },
+    { name = "typer" },
+]
+
+[[package]]
+name = "mcrcon"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/77/48/6aa55387b45cb8f8c69c4034b3438bb5c5b89e45d975ff60539e9ae7d8b7/mcrcon-0.7.0.tar.gz", hash = "sha256:c2f1caf2467e283e0ccd2436f1ce21f04242b03c5fafb3860e3924d764a910d4", size = 4219, upload-time = "2021-07-30T06:59:32.832Z" }
 
 [[package]]
 name = "mdurl"

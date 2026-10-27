@@ -233,5 +233,12 @@ mc_server/*
 node_modules/
 
 # Local debugger configuration and collected values
-debugger.local.json
-data/debugger/
+/debugger.local*.json
+/data/debugger/
+
+# Local environment variants (keep shareable examples)
+.env.*
+!.env.example
+
+# Machine-specific validation report; regenerated locally
+/docs/debugger-python-validation.json
