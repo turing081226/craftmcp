@@ -32,7 +32,7 @@
 | `tests/debugger_python/probe_real.py` | 기존 JDWP 서버에서 수동 콘솔 재현을 기다리는 MCP 검증 드라이버 |
 | `tests/debugger_python/probe_paper.py` | 제공한 Paper JAR로 임시 서버를 만들고 콘솔·MCP를 함께 검증 |
 | `plugin_template/debugger_sample/` | Java 17 Paper 콘솔 재현 플러그인 |
-| `mc_server/start-debug.*` | JDWP 개발 실행; RCON이 꺼진 서버 설정 확인 |
+| `mc_server/start-debug.*` | JDWP 개발 실행; RCON 설정 유지 |
 
 RCON 코드는 구현하지 않았다. 공용 앱이 없어서 디버거 전용 진입점을 사용한다. FastMCP 2.14.5와 전이 의존성은 `pyproject.toml`·`uv.lock`에 고정했다.
 
@@ -166,7 +166,7 @@ CRAFTDEBUG status=ok run_id=manual-001 damage=10
 -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:5005
 ```
 
-기존 서버용 `debugger.local.json`을 작업 폴더에 준비했다. 해당 서버에는 샘플 플러그인을 배포하고 실제 JAR 해시를 확인해야 한다. 현재 기존 서버의 RCON은 켜져 있으며 별도 독립 디버거 시험용 start-debug 스크립트는 RCON=false를 요구한다.
+기존 서버용 `debugger.local.json`을 작업 폴더에 준비했다. 해당 서버에는 샘플 플러그인을 배포하고 실제 JAR 해시를 확인해야 한다. start-debug 스크립트는 server.properties의 RCON 설정을 유지하며 JDWP와 함께 켤 수 있다. Windows 배치 파일은 실패·종료 메시지를 읽을 수 있도록 pause하며 자동화에서는 --no-pause를 사용한다. --check --no-pause로 실제 서버를 시작하지 않고 필수 파일과 Java를 확인할 수 있다.
 
 ## 공용 앱 연결과 남은 확인
 
