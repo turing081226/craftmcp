@@ -150,6 +150,8 @@ activemq-data/
 # Environments
 .env
 .envrc
+debugger.local.json
+data/debugger/
 .venv
 env/
 venv/

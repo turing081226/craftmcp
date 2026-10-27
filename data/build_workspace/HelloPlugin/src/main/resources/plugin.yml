@@ -1,0 +1,4 @@
+name: HelloPlugin
+version: 0.1.0
+main: local.craftmcp.HelloPlugin
+api-version: '1.20'

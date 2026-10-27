@@ -1,0 +1,4 @@
+name: Demo
+version: 0.1.0
+main: local.craftmcp.Main
+api-version: '1.20'

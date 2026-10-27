@@ -1,0 +1,4 @@
+name: Placeholder
+version: 0.1.0
+main: local.craftmcp.Placeholder
+api-version: '1.20'

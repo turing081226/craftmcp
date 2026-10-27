@@ -1,0 +1,4 @@
+mcrcon==0.7.0
+fastmcp==2.14.5
+mcp[cli]<2
+python-dotenv>=1.0,<2

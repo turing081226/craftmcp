@@ -1,0 +1,8 @@
+name: CraftMCPDebuggerSample
+version: '0.1.0'
+main: io.github.craftmcp.debuggersample.DebuggerSamplePlugin
+api-version: '1.20'
+commands:
+  craftdebug:
+    description: Deterministic console-only debugger reproduction
+    usage: craftdebug calculate <run_id> <base> <bonus>
