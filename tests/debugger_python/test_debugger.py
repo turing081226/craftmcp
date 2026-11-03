@@ -355,6 +355,16 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await service.close()
 
+    async def test_prepare_restart_releases_stop_and_allows_new_attach(self):
+        attached = await self.service.attach_debugger("local", "sample")
+        sid = attached["session_id"]
+        await self.service.call("set_breakpoint", {"session_id": sid, "class_name": "sample.Test", "line": 12})
+        await self.service.detach_all()
+        state = await self.service.call("get_debug_state", {"session_id": sid})
+        self.assertEqual(state["connection_state"], "disconnected")
+        attached_again = await self.service.attach_debugger("local", "sample")
+        self.assertNotEqual(attached_again["session_id"], sid)
+
     async def test_mcp_tool_contract(self):
         from fastmcp import Client
         from mcp_server.debugger_app import create_app

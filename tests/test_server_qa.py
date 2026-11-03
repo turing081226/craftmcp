@@ -102,6 +102,15 @@ class RconPeer:
             else:
                 writer.write(packet(0, "접속자 0명"))
             await writer.drain()
+            if mode == "missing_marker":
+                await reader.read()
+                return
+            if mode != "bad_length":
+                kind, text = await receive()
+                if kind != 0 or text:
+                    raise AssertionError("Expected completion marker")
+                writer.write(packet(0, "wrong marker" if mode == "invalid_marker" else "Unknown request 0", request_id=1))
+                await writer.drain()
             await reader.read()
         except (ConnectionError, asyncio.IncompleteReadError):
             pass  # Expected when the bounded client closes a failed/partial response.
@@ -120,7 +129,8 @@ class RconPeer:
 class RconTests(unittest.IsolatedAsyncioTestCase):
     async def test_normal_auth_failure_and_protocol_error(self):
         for mode, exception in (("normal", None), ("auth_rejected", PermissionError),
-                                ("bad_length", ConnectionError)):
+                                ("bad_length", ConnectionError), ("missing_marker", TimeoutError),
+                                ("invalid_marker", ConnectionError)):
             with self.subTest(mode=mode):
                 async with RconPeer(mode) as peer:
                     call = asyncio.to_thread(execute_rcon, "list", "fake-password", port=peer.port, timeout=2)
@@ -154,6 +164,36 @@ class RconTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises((ConnectionError, TimeoutError)):
             await asyncio.wait_for(asyncio.to_thread(execute_rcon, "list", "fake-password", port=port, timeout=1), 3)
 
+    async def test_delayed_packets_are_collected_until_marker(self):
+        async def handle(reader, writer):
+            try:
+                async def receive():
+                    length, = struct.unpack("<i", await reader.readexactly(4))
+                    return await reader.readexactly(length)
+                await receive()
+                writer.write(packet(2))
+                await writer.drain()
+                await receive()
+                writer.write(packet(0, "first-"))
+                await writer.drain()
+                await receive()  # Completion request arrives before the delayed final packet.
+                await asyncio.sleep(0.15)
+                writer.write(packet(0, "second") + packet(0, "Unknown request 0", request_id=1))
+                await writer.drain()
+                await reader.read()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+        listener = await asyncio.start_server(handle, "127.0.0.1", 0)
+        try:
+            port = listener.sockets[0].getsockname()[1]
+            for _ in range(3):
+                result = await asyncio.wait_for(asyncio.to_thread(execute_rcon, "list", "fake", port=port, timeout=3), 5)
+                self.assertEqual(result, "first-second")
+        finally:
+            listener.close()
+            await listener.wait_closed()
+
     async def test_common_stdio_app_recovers_and_stays_responsive_during_rcon_wait(self):
         (ROOT / ".cache").mkdir(exist_ok=True)
         async with RconPeer() as peer:
@@ -168,7 +208,7 @@ class RconTests(unittest.IsolatedAsyncioTestCase):
                          "MC_RCON_TIMEOUT": "1.5", "MC_SERVER_DIR": str(root)},
                     log_file=root / "mcp-stderr.log",
                 )
-                async with Client(transport, timeout=10) as client:
+                async with Client(transport, timeout=10, init_timeout=30) as client:
                     names = {tool.name for tool in await client.list_tools()}
                     self.assertTrue({"list_players", "get_server_log", "attach_debugger",
                                      "get_debug_state", "resume_execution"} <= names)

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import math
-import select
 import socket
 import struct
 import time
@@ -49,30 +48,44 @@ def execute_rcon(
                 result.extend(chunk)
             return bytes(result)
 
-        def exchange(packet_type: int, text: str) -> str:
-            payload = struct.pack("<ii", 0, packet_type) + text.encode("utf-8") + b"\0\0"
+        def send(request_id: int, packet_type: int, text: str) -> None:
+            payload = struct.pack("<ii", request_id, packet_type) + text.encode("utf-8") + b"\0\0"
             connection.settimeout(remaining())
             connection.sendall(struct.pack("<i", len(payload)) + payload)
-            chunks = bytearray()
-            while True:
-                length, = struct.unpack("<i", read_exact(4))
-                if not 10 <= length <= MAX_RESPONSE_BYTES:
-                    raise ConnectionError("Invalid RCON response length.")
-                response = read_exact(length)
-                request_id, response_type = struct.unpack("<ii", response[:8])
-                if request_id == -1:
-                    raise PermissionError("RCON authentication failed.")
-                if request_id != 0 or response[-2:] != b"\0\0":
-                    raise ConnectionError("Invalid RCON response packet.")
-                expected_type = 2 if packet_type == 3 else 0
-                if response_type != expected_type:
-                    raise ConnectionError("Unexpected RCON response type.")
-                chunks.extend(response[8:-2])
-                if len(chunks) > MAX_RESPONSE_BYTES:
-                    raise ConnectionError("RCON response exceeds the size limit.")
-                # Preserve mcrcon's currently-available packet draining behavior.
-                if not select.select([connection], [], [], 0)[0]:
-                    return chunks.decode("utf-8")
 
-        exchange(3, password)
-        return exchange(2, command)
+        def receive() -> tuple[int, int, bytes]:
+            length, = struct.unpack("<i", read_exact(4))
+            if not 10 <= length <= MAX_RESPONSE_BYTES:
+                raise ConnectionError("Invalid RCON response length.")
+            response = read_exact(length)
+            request_id, response_type = struct.unpack("<ii", response[:8])
+            if request_id == -1:
+                raise PermissionError("RCON authentication failed.")
+            if response[-2:] != b"\0\0":
+                raise ConnectionError("Invalid RCON response packet.")
+            return request_id, response_type, response[8:-2]
+
+        send(0, 3, password)
+        request_id, response_type, _ = receive()
+        if (request_id, response_type) != (0, 2):
+            raise ConnectionError("Unexpected RCON authentication response.")
+        send(0, 2, command)
+        chunks = bytearray()
+        marker_sent = False
+        while True:
+            request_id, response_type, body = receive()
+            if request_id == 1:
+                if response_type != 0 or body != b"Unknown request 0" or not marker_sent:
+                    raise ConnectionError("RCON response completion could not be verified.")
+                return chunks.decode("utf-8")
+            if (request_id, response_type) != (0, 0):
+                raise ConnectionError("Unexpected RCON command response.")
+            chunks.extend(body)
+            if len(chunks) > MAX_RESPONSE_BYTES:
+                raise ConnectionError("RCON response exceeds the size limit.")
+            if not marker_sent:
+                # Minecraft/Paper processes packets in order. Type 0 produces an
+                # identifiable response after all command packets, without running a command.
+                # Send after the first response so requests are not coalesced in old servers.
+                send(1, 0, "")
+                marker_sent = True

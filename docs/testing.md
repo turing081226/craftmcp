@@ -25,7 +25,7 @@ uv sync --locked --python python
 .\.venv\Scripts\python.exe -m unittest discover -s tests/debugger_python -p test_stdio.py -v
 ```
 
-현재 기준 총 21개다. 정상 응답, 이벤트와 응답의 순서 변경, timeout·늦은 응답, UTF-8, 페이지·참조,
+현재 기준 총 22개다. 정상 응답, 이벤트와 응답의 순서 변경, timeout·늦은 응답, UTF-8, 페이지·참조,
 자동 재개, EOF·프로세스 종료, 설정·경로 검증과 MCP 도구 8개 호출을 확인한다.
 백엔드는 시험 전용 모의 헬퍼이며 실제 JVM이나 Paper 성공으로 해석하지 않는다.
 
@@ -46,6 +46,14 @@ QA에서 발견한 RCON 장애·로그 이어 읽기 문제의 회귀 시험은 
 임시 파일과 임시 루프백 TCP 포트만 사용한다. 인증·명령 무응답, EOF, 인증 거절,
 총 통신 기한과 소켓 정리, 실제 공용 stdio MCP의 장애 후 복구·동시 호출,
 로그 교체·재작성·잘림과 부분 UTF-8 기록을 검사한다. 실제 Paper 서버는 필요하지 않다.
+
+추가 QA의 경로·빌드·배포·동시 호출·재시작 시험까지 함께 실행하려면 다음을 사용한다.
+
+```powershell
+.\.venv\Scripts\python.exe eval/qa_additional.py
+```
+
+현재 28개 회귀 시험이며 통과 시 종료 코드 0이다. 임시 실행기와 자체 프로세스의 실제 종료·재시작도 포함한다.
 
 ## 3. 실제 Java 헬퍼·JVM·MCP 통합 시험
 
@@ -77,7 +85,7 @@ Java 산출물이 없으면 이 직접 실행 명령은 실패한다. 아래 전
 .\.venv\Scripts\python.exe -m unittest discover -s tests/debugger_python -p "test_*.py" -v
 ```
 
-현재 디버거 전체 기대 결과는 **28개 통과, skipped=0**이다. 별도의 QA 회귀 시험 10개도 함께 실행한다.
+현재 디버거 전체 기대 결과는 **29개 통과, skipped=0**이다. 별도의 추가 QA 회귀 시험 28개도 함께 실행한다.
 테스트 수는 향후 코드 변경 시 늘어날 수 있다.
 실행 증거는 data/debugger/<run_id>/evidence.jsonl과 validation-summary.json에 생성한다.
 
@@ -91,7 +99,7 @@ java -cp debugger_helper/gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.Gr
 
 시험 보고서는 debugger_helper/build/reports/tests/test/index.html에 생성된다.
 상세 범위와 샘플 수동 입력은 [Java 헬퍼 안내](debugger-java.md)를 따른다.
-이 결과는 Python·MCP 통합 시험 28개와 별도로 센다.
+이 결과는 Python·MCP 디버거 통합 시험 29개와 별도로 센다.
 
 ## 5. 실제 Paper에서 RCON 없이 전체 흐름 검증
 
@@ -224,6 +232,27 @@ get_server_log(cursor=이전_next_cursor, max_lines=100)에 그대로 전달한�
 검증 비용은 이전 offset까지의 파일 크기에 비례한다. 파일이 변경되는 순간의 원자적 스냅샷은 보장하지 않는다.
 개행이 없는 마지막 줄은 반환하거나 offset을 전진시키지 않고, 개행이 추가된 다음 호출에서 반환한다.
 따라서 나누어 기록된 UTF-8 문자가 이어 읽기에서 손실되지 않는다.
+
+### 자동 배포와 재시작 시험
+
+자동 배포 대상은 실행기로 시작한다. 기존 서버와 자동 재시작 배치 창을 먼저 정상 종료한 뒤 실행한다.
+
+```powershell
+.\.venv\Scripts\python.exe -m mcp_server.paper_runner --server-dir "C:\minecraft\paper" --debug
+```
+
+실행기는 서버 종료와 재시작을 관찰하고 설치 중 재시작을 보류한다. 기존 start-debug.bat은
+수동 디버깅에 사용할 수 있으며, 그 서버에 자동 배포를 요청하면 실행기 필요 오류로 거절한다.
+MCP 설정의 서버 폴더·RCON 포트와 비밀번호·디버거 주소를 실행 중인 동일 서버로 맞춘다.
+
+실제 Paper를 별도 임시 서버에 복사해 공용 MCP의 조회·디버거 연결·배포·새 JVM·재접속을 검증하려면 다음을 사용한다.
+
+```powershell
+.\.venv\Scripts\python.exe tests/probe_managed_paper.py --server-dir "C:\minecraft\paper"
+```
+
+기존 EULA 동의가 필요하다. 원본 서버를 변경하지 않고 `.cache/paper-managed/<id>`에 증거를 남긴다.
+실패 상태와 설치 복구 방법은 [추가 QA 수정 안내](qa-remediation-2026-11-03.md)를 따른다.
 
 ## 8. Git에 포함할 파일과 로컬에 둘 파일
 

@@ -266,6 +266,13 @@ class DebuggerService:
                        "runtime_jar": str(runtime.jar), "server_version": runtime.server_version,
                        "project_root": str(project.root), "source_match": "unverified",
                        "python_version": platform.python_version(), "fastmcp_version": version("fastmcp")}
+            from mcp_server.paper_runner import read_state
+            try:
+                managed = read_state(runtime.jar.parent)
+                if managed["phase"] == "running":
+                    context["runtime_boot_id"] = managed["boot_id"]
+            except RuntimeError:
+                pass  # Standalone JVMs and manually launched servers use configured metadata.
             self.evidence.write("metadata_started", {"runtime_id": runtime_id, "project_id": project_id})
             context["source"] = await asyncio.to_thread(project_revision, project)
             context["runtime_jar_sha256"] = await asyncio.to_thread(file_hash, runtime.jar)
@@ -305,6 +312,17 @@ class DebuggerService:
                 # Keep historical routing: Java decides vm_disconnected/stale_reference after detach.
                 return result
         return await backend.request(method, params)
+
+    async def detach_all(self) -> None:
+        """Release this app's held stops before a managed server restart."""
+        for sid in list(self._sessions):
+            try:
+                state = await self.call("get_debug_state", {"session_id": sid})
+                if state["connection_state"] == "connected":
+                    await self.call("detach_debugger", {"session_id": sid})
+            except DebuggerError as error:
+                if error.code not in {"session_not_found", "vm_disconnected", "vm_terminated"}:
+                    raise
 
     async def close(self) -> None:
         if self._closed:

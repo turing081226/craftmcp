@@ -238,6 +238,9 @@ node_modules/
 /debugger.local*.json
 /data/debugger/
 
+# Managed Paper process state, installation journals, backups and console logs
+.craftmcp/
+
 # Local environment variants (keep shareable examples)
 .env.*
 !.env.example

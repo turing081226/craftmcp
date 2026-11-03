@@ -1,4 +1,6 @@
 mcrcon==0.7.0
+anyio>=4,<5
+PyYAML==6.0.3
 fastmcp==2.14.5
 mcp[cli]<2
 python-dotenv>=1.0,<2

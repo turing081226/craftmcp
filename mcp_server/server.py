@@ -5,10 +5,11 @@ import re
 import shutil
 import subprocess
 import sys
-import threading
-import time
 from contextlib import asynccontextmanager
-from pathlib import Path
+from functools import partial
+from pathlib import Path, PureWindowsPath
+
+import anyio
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -18,6 +19,8 @@ from dotenv import load_dotenv
 from fastmcp import FastMCP
 from mcp_server.adapters.rcon import execute_rcon
 from mcp_server.services.debugger import DebuggerConfig, DebuggerService
+from mcp_server.services.deployment import deploy
+from mcp_server.services.file_gate import FileGate
 from mcp_server.services.server_log import read_server_log
 from mcp_server.tools.debugger import register_debugger_tools
 
@@ -61,7 +64,6 @@ FORBIDDEN_SOURCE_PATTERNS = (
     "java.nio.file.Files.copy",
 )
 DEPLOY_TIMEOUT_SECONDS = 120
-DEPLOY_LOCK = threading.Lock()
 
 
 def _result(
@@ -187,8 +189,7 @@ def get_server_log(start_offset: int = 0, max_lines: int = 100, cursor: str | No
         )
 
 
-@mcp.tool()
-def build_plugin(
+def _build_plugin(
     plugin_name: str,
     main_class: str,
     source_files: dict[str, str],
@@ -206,8 +207,10 @@ def build_plugin(
     for relative_path, source in source_files.items():
         path = Path(relative_path)
         if (
-            path.is_absolute()
+            path.anchor or PureWindowsPath(relative_path).anchor
             or ".." in path.parts
+            or ".." in PureWindowsPath(relative_path).parts
+            or ":" in relative_path
             or path.suffix != ".java"
             or not source.strip()
         ):
@@ -219,6 +222,10 @@ def build_plugin(
     template_dir = project_root / "plugin_template"
     build_root = project_root / "data" / "build_workspace" / plugin_name
     try:
+        workspace = (project_root / "data/build_workspace").resolve()
+        if (not workspace.is_relative_to(project_root.resolve())
+                or build_root.is_symlink() or not build_root.resolve().is_relative_to(workspace)):
+            return _plugin_error("빌드 경로가 작업 공간 밖을 가리킵니다.")
         if not (template_dir / "build.gradle").is_file():
             return _plugin_error("plugin_template/build.gradle이 없습니다.")
         if not (template_dir / "settings.gradle").is_file():
@@ -229,9 +236,13 @@ def build_plugin(
         if build_root.exists():
             shutil.rmtree(build_root)
         shutil.copytree(template_dir, build_root)
-        java_root = build_root / "src" / "main" / "java"
+        java_root = (build_root / "src" / "main" / "java").resolve()
+        if not java_root.is_relative_to(build_root.resolve()):
+            return _plugin_error("Java 소스 경로가 빌드 폴더 밖을 가리킵니다.")
         for relative_path, source in source_files.items():
-            destination = java_root / relative_path
+            destination = (java_root / relative_path).resolve()
+            if not destination.is_relative_to(java_root):
+                return _plugin_error("Java 소스 경로가 빌드 폴더 밖을 가리킵니다.")
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(source, encoding="utf-8")
 
@@ -305,123 +316,70 @@ def build_plugin(
     )
 
 
-@mcp.tool()
-def deploy_plugin(plugin_name: str) -> str:
-    """빌드된 플러그인을 백업하고 교체한 뒤 서버 재시작과 로드를 확인합니다."""
+def _build_locked(plugin_name: str, main_class: str, source_files: dict[str, str]) -> str:
     if not PLUGIN_NAME_PATTERN.fullmatch(plugin_name):
-        return _result(
-            ok=False,
-            stage="deploy_plugin",
-            errors=["plugin_name은 영문자, 숫자, 밑줄, 하이픈만 사용해야 합니다."],
-        )
-    server_dir_value = os.environ.get("MC_SERVER_DIR")
-    if not server_dir_value:
-        return _result(
-            ok=False,
-            stage="deploy_plugin",
-            errors=["MC_SERVER_DIR 환경변수가 설정되지 않았습니다."],
-        )
-    server_dir = Path(server_dir_value)
-    if not server_dir.is_dir():
-        return _result(
-            ok=False,
-            stage="deploy_plugin",
-            errors=[f"서버 폴더를 찾을 수 없습니다: {server_dir}"],
-        )
-
-    jar_path = _find_built_jar(plugin_name)
-    if jar_path is None:
-        return _result(
-            ok=False,
-            stage="deploy_plugin",
-            errors=["플러그인 빌드 결과 JAR을 하나로 찾을 수 없습니다."],
-        )
-
-    start_script = server_dir / "start.bat"
+        return _plugin_error("Invalid plugin name.")
+    project_root = Path(__file__).resolve().parents[1]
     try:
-        start_contents = start_script.read_text(encoding="utf-8")
+        with FileGate(project_root / ".cache/build-locks" / f"{plugin_name}.lock"):
+            return _build_plugin(plugin_name, main_class, source_files)
     except OSError as error:
-        return _result(
-            ok=False,
-            stage="deploy_plugin",
-            errors=[f"start.bat을 읽을 수 없습니다: {error}"],
-        )
-    if ":loop" not in start_contents or "goto loop" not in start_contents.lower():
-        return _result(
-            ok=False,
-            stage="deploy_plugin",
-            errors=["start.bat에 서버 재시작 루프가 없어 배포를 중단했습니다."],
-        )
+        return _plugin_error(str(error))
 
-    plugins_dir = server_dir / "plugins"
-    target = plugins_dir / f"{plugin_name}.jar"
-    backup_dir = (
-        Path(__file__).resolve().parents[1]
-        / "data"
-        / "plugin_backups"
-        / plugin_name
-        / time.strftime("%Y%m%d-%H%M%S")
-    )
-    with DEPLOY_LOCK:
+
+@mcp.tool()
+async def build_plugin(plugin_name: str, main_class: str, source_files: dict[str, str]) -> str:
+    """Build validated Java sources without blocking debugger calls."""
+    return await anyio.to_thread.run_sync(_build_locked, plugin_name, main_class, source_files)
+
+
+def _deploy_plugin(plugin_name: str, prepare_stop=lambda: None) -> str:
+    if not PLUGIN_NAME_PATTERN.fullmatch(plugin_name):
+        return _result(ok=False, stage="deploy_plugin", errors=["Invalid plugin name."],
+                       phase="preflight", files_modified=False, backup_path=None, execution_unknown=False)
+    server_value = os.environ.get("MC_SERVER_DIR")
+    if not server_value:
+        return _result(ok=False, stage="deploy_plugin", errors=["MC_SERVER_DIR is required."],
+                       phase="preflight", files_modified=False, backup_path=None, execution_unknown=False)
+    project_root = Path(__file__).resolve().parents[1]
+    try:
+        properties = {}
+        for line in (Path(server_value) / "server.properties").read_text(encoding="utf-8-sig").splitlines():
+            if line.strip().startswith(("#", "!")):
+                continue
+            key, separator, value = line.partition("=")
+            if separator:
+                properties[key.strip()] = value.strip()
+        if (properties.get("enable-rcon", "false").lower() != "true"
+                or int(properties.get("rcon.port", "25575")) != int(os.environ.get("MC_RCON_PORT", "25575"))):
+            raise ValueError("The MCP RCON port must match this managed server's enabled RCON configuration.")
+        with FileGate(project_root / ".cache/build-locks" / f"{plugin_name}.lock"):
+            artifact = _find_built_jar(plugin_name)
+            if artifact is None:
+                raise ValueError("Build exactly one plugin JAR before deployment.")
+            result = deploy(plugin_name, artifact, Path(server_value), rcon=_rcon_command,
+                            prepare_stop=prepare_stop, timeout=DEPLOY_TIMEOUT_SECONDS)
+        return _result(stage="deploy_plugin", **result)
+    except (OSError, ValueError, RuntimeError) as error:
+        return _result(ok=False, stage="deploy_plugin", errors=[str(error)], phase="preflight",
+                       files_modified=False, backup_path=None, execution_unknown=False)
+
+
+@mcp.tool()
+async def deploy_plugin(plugin_name: str) -> str:
+    """Deploy to paper_runner: stop, observe exit, install, restart, verify exact plugin."""
+    loop = asyncio.get_running_loop()
+
+    def prepare_stop():
+        pending = asyncio.run_coroutine_threadsafe(debugger_service.detach_all(), loop)
         try:
-            plugins_dir.mkdir(parents=True, exist_ok=True)
-            backup_path: str | None = None
-            if target.exists():
-                backup_dir.mkdir(parents=True, exist_ok=True)
-                backup_file = backup_dir / target.name
-                shutil.copy2(target, backup_file)
-                backup_path = str(backup_file)
+            pending.result(timeout=30)
+        except TimeoutError:
+            pending.cancel()
+            raise RuntimeError("Could not detach debugger sessions before restart.")
 
-            temporary_target = plugins_dir / f".{plugin_name}.jar.tmp"
-            shutil.copy2(jar_path, temporary_target)
-            temporary_target.replace(target)
-            log_path = server_dir / "logs" / "latest.log"
-            log_offset = log_path.stat().st_size if log_path.is_file() else 0
+    return await anyio.to_thread.run_sync(partial(_deploy_plugin, plugin_name, prepare_stop))
 
-            _rcon_command("stop")
-            deadline = time.monotonic() + DEPLOY_TIMEOUT_SECONDS
-            server_ready = False
-            while time.monotonic() < deadline:
-                time.sleep(2)
-                try:
-                    output = _rcon_command("plugins")
-                    if plugin_name.lower() in output.lower():
-                        server_ready = True
-                        break
-                except (OSError, TimeoutError):
-                    continue
 
-            if not server_ready:
-                return _result(
-                    ok=False,
-                    stage="deploy_plugin",
-                    errors=["서버 재시작 후 플러그인 로드 확인 시간 초과"],
-                    next_log_offset=log_offset,
-                    backup_path=backup_path,
-                )
-
-            current_log_size = log_path.stat().st_size if log_path.is_file() else log_offset
-            with log_path.open("rb") as log_file:
-                log_file.seek(min(log_offset, current_log_size))
-                log_delta = log_file.read().decode("utf-8", errors="replace")
-            errors = [
-                line
-                for line in log_delta.splitlines()
-                if "exception" in line.lower() or "error" in line.lower()
-            ]
-            return _result(
-                ok=not errors,
-                stage="deploy_plugin",
-                errors=errors,
-                raw_output=log_delta,
-                next_log_offset=current_log_size,
-                backup_path=backup_path,
-            )
-        except (OSError, RuntimeError) as error:
-            return _result(
-                ok=False,
-                stage="deploy_plugin",
-                errors=[f"플러그인 배포에 실패했습니다: {error}"],
-            )
 if __name__ == "__main__":
     mcp.run(transport="stdio")

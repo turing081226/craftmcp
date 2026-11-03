@@ -260,8 +260,22 @@ class JavaHelperTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_lease_expiry_releases_actual_jvm(self):
         target = await self.target()
-        service, sid = await self.service(target, lease=500)
-        bp, stop = await self.stop(service, sid, target)
+        service, sid = await self.service(target, lease=3000)
+        stopped = asyncio.Event()
+        stop_data = {}
+        record = service.evidence.write
+
+        def observe(kind, payload):
+            record(kind, payload)
+            if kind == "event" and payload["event"] == "stopped":
+                stop_data.update(payload["data"])
+                stopped.set()
+
+        service.evidence.write = observe
+        await self.call(service, "set_breakpoint", session_id=sid, class_name=CLASS, line=LINE)
+        await target.command("run")
+        await asyncio.wait_for(stopped.wait(), 10)
+        stop = stop_data
         frame = await self.frame(service, sid, stop)
         await target.wait_line("RESULT damage=12")
         state = await self.poll_state(service, sid, lambda state: state["active_stop"] is None)
