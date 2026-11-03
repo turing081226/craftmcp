@@ -139,7 +139,10 @@ class HelperClient:
                 await asyncio.wait_for(discard_invalid_output(), self.shutdown_timeout)
             except asyncio.TimeoutError:
                 if self.process.returncode is None:
-                    self.process.terminate()
+                    try:
+                        self.process.terminate()
+                    except ProcessLookupError:
+                        pass  # The helper may exit before the termination call.
                 await discard_invalid_output()
 
     async def _read_stderr(self) -> None:
@@ -239,11 +242,17 @@ class HelperClient:
                         self._record("forced_termination", cleanup_error.as_dict())
                     except DebuggerError:
                         pass
-                    self.process.terminate()
+                    try:
+                        self.process.terminate()
+                    except ProcessLookupError:
+                        pass  # The helper may exit between wait timeout and termination.
                     try:
                         await asyncio.wait_for(self.process.wait(), self.shutdown_timeout)
                     except asyncio.TimeoutError:
-                        self.process.kill()
+                        try:
+                            self.process.kill()
+                        except ProcessLookupError:
+                            pass  # Reap an already-exited process as well.
                         await self.process.wait()
             self._fail(DebuggerError("backend_unavailable", "Helper closed."))
             if self._tasks:

@@ -6,6 +6,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 from mcp_server.adapters.debugger import DebuggerError, HelperClient
 from mcp_server.adapters.debugger.models import decode_message, validate_params
@@ -19,12 +21,27 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.clients = []
         self.records = []
+        self.record_changed = asyncio.Event()
 
     def client(self, mode="normal", **kwargs):
+        def record(kind, payload):
+            self.records.append((kind, payload))
+            self.record_changed.set()
+
         client = HelperClient([sys.executable, "-u", str(MOCK), "--mode", mode],
-                              record=lambda k, p: self.records.append((k, p)), **kwargs)
+                              record=record, **kwargs)
         self.clients.append(client)
         return client
+
+    async def wait_record(self, predicate):
+        async def wait():
+            while True:
+                self.record_changed.clear()
+                for kind, payload in self.records:
+                    if predicate(kind, payload):
+                        return payload
+                await self.record_changed.wait()
+        return await asyncio.wait_for(wait(), 5)
 
     async def asyncTearDown(self):
         for client in self.clients:
@@ -83,13 +100,14 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         sid = await self.attach(client, lease=150)
         bp = await client.request("set_breakpoint", {"session_id": sid, "class_name": "sample.Pending", "line": 12})
         self.assertEqual(bp["status"], "pending")
-        await asyncio.sleep(0.20)
+        changed = await self.wait_record(lambda k, p: k == "event" and p["event"] == "breakpoint_changed")
+        self.assertEqual(changed["data"]["status"], "verified")
+        stopped = await self.wait_record(lambda k, p: k == "event" and p["event"] == "stopped")
+        stop = stopped["data"]
+        await self.wait_record(lambda k, p: k == "event" and p["event"] == "resumed"
+                               and p["data"]["stop_id"] == stop["stop_id"] and p["data"]["reason"] == "lease_expired")
         state = await client.request("get_debug_state", {"session_id": sid})
         self.assertEqual(state["breakpoints"][0]["status"], "verified")
-        stop = state["active_stop"]
-        self.assertIsNotNone(stop)
-        await asyncio.sleep(0.20)
-        state = await client.request("get_debug_state", {"session_id": sid})
         self.assertIsNone(state["active_stop"])
         self.assertTrue(any(p.get("event") == "resumed" and p["data"]["reason"] == "lease_expired" for k, p in self.records if k == "event"))
         with self.assertRaises(DebuggerError) as error:
@@ -104,10 +122,10 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(DebuggerError) as error:
             await self.attach(client)
         self.assertEqual(error.exception.code, "request_timeout")
-        await asyncio.sleep(0.25)
-        late = [p for k, p in self.records if k == "late_response"]
-        self.assertEqual(len(late), 1)
-        sid = late[0]["result"]["session_id"]
+        late = await self.wait_record(lambda k, p: k == "late_response")
+        sid = late["result"]["session_id"]
+        self.assertEqual(sum(k == "late_response" for k, p in self.records), 1)
+        client.request_timeout = 10  # The deliberately short deadline applies only to attach.
         state = await client.request("get_debug_state", {"session_id": sid})
         self.assertEqual(state["connection_state"], "connected")
         self.assertEqual(sum(k == "request" and p["method"] == "attach_debugger" for k, p in self.records), 1)
@@ -200,6 +218,24 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error.exception.code, "ready_timeout")
         self.assertIsNotNone(client.process.returncode)
 
+    async def test_cleanup_tolerates_helper_exiting_before_terminate_or_kill(self):
+        for at_kill in (False, True):
+            with self.subTest(at_kill=at_kill):
+                client = self.client()
+                client._failure = DebuggerError("ready_timeout", "No ready event.")
+                waits = [asyncio.TimeoutError(), asyncio.TimeoutError(), 0] if at_kill else [asyncio.TimeoutError(), 0]
+                client.process = SimpleNamespace(
+                    stdin=None, returncode=None, wait=AsyncMock(side_effect=waits),
+                    terminate=Mock(side_effect=None if at_kill else ProcessLookupError()),
+                    kill=Mock(side_effect=ProcessLookupError()),
+                )
+                with self.assertRaises(DebuggerError) as error:
+                    await client.close()
+                self.assertEqual(error.exception.code, "shutdown_timeout")
+                self.assertTrue(client._closed)
+                self.assertEqual(client.process.wait.await_count, len(waits))
+                self.assertEqual(client.process.kill.call_count, int(at_kill))
+
     async def test_shutdown_and_stdin_eof_release_stop(self):
         for eof in (False, True):
             client = self.client()
@@ -267,28 +303,48 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_late_attach_can_be_inspected_without_retry(self):
         await self.service.close()
-        factory = lambda command, **kwargs: HelperClient([sys.executable, "-u", str(MOCK), "--mode", "late_attach"], **kwargs)
-        from dataclasses import replace
-        config = replace(self.config, request_timeout=0.05)
-        self.service = DebuggerService(config, client_factory=factory, simulated=True)
+
+        class AttachTimeoutClient(HelperClient):
+            async def request(self, method, params, *, timeout=None):
+                return await super().request(method, params, timeout=0.01 if method == "attach_debugger" else timeout)
+
+        factory = lambda command, **kwargs: AttachTimeoutClient([sys.executable, "-u", str(MOCK), "--mode", "late_attach"], **kwargs)
+        self.service = DebuggerService(self.config, client_factory=factory, simulated=True)
+        bound = asyncio.Event()
+        binding = {}
+        write = self.service.evidence.write
+
+        def record(kind, payload):
+            write(kind, payload)
+            if kind == "late_session_bound":
+                binding.update(payload)
+                bound.set()
+
+        self.service.evidence.write = record
         timed_out = await self.service.invoke("attach_debugger", {"runtime_id": "local", "project_id": "sample"})
         self.assertEqual(timed_out["error"]["code"], "request_timeout")
-        await asyncio.sleep(0.25)
+        await asyncio.wait_for(bound.wait(), 5)
         records = [json.loads(line) for line in self.service.evidence.path.read_text(encoding="utf-8").splitlines()]
-        binding = next(r["payload"] for r in records if r["kind"] == "late_session_bound")
         state = await self.service.invoke("get_debug_state", {"session_id": binding["session_id"]})
         self.assertTrue(state["ok"])
         self.assertEqual(sum(r["kind"] == "request" and r["payload"]["method"] == "attach_debugger" for r in records), 1)
 
     async def test_registered_external_runtime_is_read_only(self):
-        data = {"helper_jar": "helper.jar", "projects": {"sample": {"root": ".", "artifact_jar": str(ROOT / "plugin_template/debugger_sample/build/libs/craftmcp-debugger-sample.jar")}},
-                "runtimes": {"external": {"project_id": "sample", "host": "127.0.0.1", "port": 5005, "jar": str(ROOT / "mc_server/paper.jar")}}}
-        path = self.root / "external.json"
-        path.write_text(json.dumps(data), encoding="utf-8")
-        config = DebuggerConfig.load(path, workspace=self.root)
-        self.assertEqual(config.runtimes["external"].jar, ROOT / "mc_server/paper.jar")
-        self.assertEqual(config.projects["sample"].artifact_jar, ROOT / "plugin_template/debugger_sample/build/libs/craftmcp-debugger-sample.jar")
-        self.assertFalse(config.runtimes["external"].jar.is_file())
+        # A sibling directory is external to this test's workspace, independent of local Paper installs.
+        with tempfile.TemporaryDirectory(dir=ROOT / ".cache") as external:
+            runtime = Path(external).resolve() / "paper.jar"
+            artifact = runtime.with_name("sample.jar")
+            runtime.write_bytes(b"test runtime")
+            artifact.write_bytes(b"test artifact")
+            data = {"helper_jar": "helper.jar", "projects": {"sample": {"root": ".", "artifact_jar": str(artifact)}},
+                    "runtimes": {"external": {"project_id": "sample", "host": "127.0.0.1", "port": 5005, "jar": str(runtime)}}}
+            path = self.root / "external.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            config = DebuggerConfig.load(path, workspace=self.root)
+            self.assertEqual(config.runtimes["external"].jar, runtime)
+            self.assertEqual(config.projects["sample"].artifact_jar, artifact)
+            self.assertEqual(runtime.read_bytes(), b"test runtime")
+            self.assertEqual(artifact.read_bytes(), b"test artifact")
 
     async def test_real_mode_requires_runtime_jar(self):
         service = DebuggerService(self.config)

@@ -25,7 +25,7 @@ uv sync --locked --python python
 .\.venv\Scripts\python.exe -m unittest discover -s tests/debugger_python -p test_stdio.py -v
 ```
 
-현재 기준 총 20개다. 정상 응답, 이벤트와 응답의 순서 변경, timeout·늦은 응답, UTF-8, 페이지·참조,
+현재 기준 총 21개다. 정상 응답, 이벤트와 응답의 순서 변경, timeout·늦은 응답, UTF-8, 페이지·참조,
 자동 재개, EOF·프로세스 종료, 설정·경로 검증과 MCP 도구 8개 호출을 확인한다.
 백엔드는 시험 전용 모의 헬퍼이며 실제 JVM이나 Paper 성공으로 해석하지 않는다.
 
@@ -36,6 +36,16 @@ RCON 모듈 설치와 도구 등록도 서버 없이 확인할 수 있다.
 ```
 
 기대 결과는 list_players가 포함된 목록이다. 이 명령은 RCON 명령을 전송하지 않는다.
+
+QA에서 발견한 RCON 장애·로그 이어 읽기 문제의 회귀 시험은 다음과 같다.
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p test_server_qa.py -v
+```
+
+임시 파일과 임시 루프백 TCP 포트만 사용한다. 인증·명령 무응답, EOF, 인증 거절,
+총 통신 기한과 소켓 정리, 실제 공용 stdio MCP의 장애 후 복구·동시 호출,
+로그 교체·재작성·잘림과 부분 UTF-8 기록을 검사한다. 실제 Paper 서버는 필요하지 않다.
 
 ## 3. 실제 Java 헬퍼·JVM·MCP 통합 시험
 
@@ -67,7 +77,8 @@ Java 산출물이 없으면 이 직접 실행 명령은 실패한다. 아래 전
 .\.venv\Scripts\python.exe -m unittest discover -s tests/debugger_python -p "test_*.py" -v
 ```
 
-현재 전체 기대 결과는 **27개 통과, skipped=0**이다. 테스트 수는 향후 코드 변경 시 늘어날 수 있다.
+현재 디버거 전체 기대 결과는 **28개 통과, skipped=0**이다. 별도의 QA 회귀 시험 10개도 함께 실행한다.
+테스트 수는 향후 코드 변경 시 늘어날 수 있다.
 실행 증거는 data/debugger/<run_id>/evidence.jsonl과 validation-summary.json에 생성한다.
 
 ## 4. Java 헬퍼 자체 시험
@@ -80,7 +91,7 @@ java -cp debugger_helper/gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.Gr
 
 시험 보고서는 debugger_helper/build/reports/tests/test/index.html에 생성된다.
 상세 범위와 샘플 수동 입력은 [Java 헬퍼 안내](debugger-java.md)를 따른다.
-이 결과는 Python·MCP 통합 시험 27개와 별도로 센다.
+이 결과는 Python·MCP 통합 시험 28개와 별도로 센다.
 
 ## 5. 실제 Paper에서 RCON 없이 전체 흐름 검증
 
@@ -162,6 +173,9 @@ craftdebug calculate probe-001 7 3
 
 이 절은 RCON이 켜진 시험 서버에서 진행한다. start-debug.bat도 enable-rcon=true 설정을 허용하므로 JDWP와 RCON을 함께 사용할 수 있다. 자동 Paper 검증 드라이버는 독립 시험을 위해 RCON=false를 사용한다.
 현재 RCON 코드는 localhost:25575로 접속한다. 실제 server.properties에서 enable-rcon=true와 비어 있지 않은 비밀번호를 설정해야 한다.
+다른 로컬 포트는 MC_RCON_PORT로 지정한다. MC_RCON_TIMEOUT은 접속·인증·명령 응답 전체의
+기한이며 기본 5초, 최대 300초다. 기한 초과나 EOF는 MCP 오류로 반환하고 소켓을 닫는다.
+명령 전송 후 오류가 나면 실행 여부는 불명일 수 있으며 자동 재전송하지 않는다.
 
 MCP 서버의 비밀번호는 로컬 .env 또는 환경변수로 제공한다.
 
@@ -180,15 +194,36 @@ $env:MC_RCON_PASSWORD = Read-Host '시험 서버 RCON 비밀번호'
 기대 결과는 실제 서버의 list 명령 응답이다. 인증 오류·연결 실패와 정상 응답을 구분한다.
 list 성공만으로 플러그인 계산·게임 상태 검증까지 통과했다고 보지 않는다.
 
-RCON MCP 진입점과 디버거 MCP 진입점은 각각 다음과 같다.
+공용 MCP 진입점은 다음과 같다. RCON·로그·빌드·배포·디버거 도구를 함께 등록한다.
 
 ```powershell
 .\.venv\Scripts\python.exe -m mcp_server.server
+```
+
+디버거 설정은 DEBUGGER_CONFIG로 지정한다. 생략하면 저장소의 debugger.example.json을 사용한다.
+디버거만 필요한 경우의 별도 진입점도 유지한다.
+
+```powershell
 .\.venv\Scripts\python.exe -m mcp_server.debugger_app --config debugger.local.json
 ```
 
-두 명령은 서로 다른 stdio 서버다. MCP 호스트에서 각각 별도 서버로 등록한다.
-병합은 두 구현과 공통 의존성을 보존한 것이며 하나의 공용 MCP 앱으로 합친 것은 아니다.
+공용 앱의 list_players는 소켓 작업을 별도 스레드에서 실행하므로 RCON 응답을 기다리는 동안
+디버거 도구를 호출할 수 있다. 실제 Paper에서 RCON 샘플 명령 → 중단 → 재개 → 최종 RCON 응답의
+전체 흐름은 별도 통합 시험이 필요하다.
+
+### 로그 이어 읽기
+
+처음에는 get_server_log(max_lines=100)을 호출하고, 이후에는 응답의 next_cursor 문자열을
+get_server_log(cursor=이전_next_cursor, max_lines=100)에 그대로 전달한다.
+기존 next_offset도 반환하며 cursor와 일치하는 start_offset을 함께 전달할 수 있다.
+양수 start_offset만 전달하면 ok=false, reset_required=true, next_offset=0으로 거절한다.
+파일 식별 정보가 없는 숫자 offset만으로는 로그 교체를 판별할 수 없기 때문이다.
+
+파일 교체·잘림·이미 읽은 내용의 변경을 감지하면 reset=true와 reset_reason을 반환하고
+새 로그의 처음부터 읽는다. 소비한 바이트 전체의 SHA-256을 다시 계산하므로
+검증 비용은 이전 offset까지의 파일 크기에 비례한다. 파일이 변경되는 순간의 원자적 스냅샷은 보장하지 않는다.
+개행이 없는 마지막 줄은 반환하거나 offset을 전진시키지 않고, 개행이 추가된 다음 호출에서 반환한다.
+따라서 나누어 기록된 UTF-8 문자가 이어 읽기에서 손실되지 않는다.
 
 ## 8. Git에 포함할 파일과 로컬에 둘 파일
 

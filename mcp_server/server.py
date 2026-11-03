@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import re
@@ -15,8 +16,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
-from mcrcon import MCRcon
+from mcp_server.adapters.rcon import execute_rcon
 from mcp_server.services.debugger import DebuggerConfig, DebuggerService
+from mcp_server.services.server_log import read_server_log
 from mcp_server.tools.debugger import register_debugger_tools
 
 load_dotenv(Path(__file__).with_name(".env"))
@@ -110,8 +112,11 @@ def _rcon_command(command: str) -> str:
     password = os.environ.get("MC_RCON_PASSWORD")
     if not password:
         raise RuntimeError("MC_RCON_PASSWORD 환경변수가 설정되지 않았습니다.")
-    with MCRcon("127.0.0.1", password, port=25575) as rcon:
-        return rcon.command(command)
+    return execute_rcon(
+        command, password,
+        port=int(os.environ.get("MC_RCON_PORT", "25575")),
+        timeout=float(os.environ.get("MC_RCON_TIMEOUT", "5")),
+    )
 
 
 def _find_built_jar(plugin_name: str) -> Path | None:
@@ -125,14 +130,17 @@ def _find_built_jar(plugin_name: str) -> Path | None:
 
 
 @mcp.tool()
-def list_players() -> str:
+async def list_players() -> str:
     """테스트 Minecraft 서버의 접속자 목록을 조회합니다."""
-    return _rcon_command("list")
+    return await asyncio.to_thread(_rcon_command, "list")
 
 
 @mcp.tool()
-def get_server_log(start_offset: int = 0, max_lines: int = 100) -> str:
-    """서버 로그에서 start_offset 이후의 새 로그를 최대 max_lines줄 반환합니다."""
+def get_server_log(start_offset: int = 0, max_lines: int = 100, cursor: str | None = None) -> str:
+    """완성된 로그 줄을 읽습니다. 이어 읽을 때 이전 next_cursor를 cursor에 전달하세요.
+
+    파일 교체·내용 변경은 reset=true와 함께 처음부터 반환합니다.
+    """
     server_dir = os.environ.get("MC_SERVER_DIR")
     if not server_dir:
         return _result(
@@ -155,31 +163,15 @@ def get_server_log(start_offset: int = 0, max_lines: int = 100) -> str:
 
     log_path = Path(server_dir) / "logs" / "latest.log"
     try:
-        file_size = log_path.stat().st_size
-        if start_offset > file_size:
-            return _result(
-                ok=False,
-                stage="get_server_log",
-                errors=["start_offset이 현재 로그 파일 크기보다 큽니다."],
-                next_offset=file_size,
-            )
-
-        with log_path.open("rb") as log_file:
-            log_file.seek(start_offset)
-            chunks: list[bytes] = []
-            next_offset = start_offset
-            for _ in range(max_lines):
-                line = log_file.readline()
-                if not line:
-                    break
-                chunks.append(line)
-                next_offset = log_file.tell()
-
         return _result(
             ok=True,
             stage="get_server_log",
-            raw_output=b"".join(chunks).decode("utf-8", errors="replace"),
-            next_offset=next_offset,
+            **read_server_log(log_path, start_offset=start_offset, max_lines=max_lines, cursor=cursor),
+        )
+    except ValueError as error:
+        return _result(
+            ok=False, stage="get_server_log", errors=[str(error)],
+            reset_required=True, next_offset=0,
         )
     except FileNotFoundError:
         return _result(

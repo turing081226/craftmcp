@@ -1,8 +1,9 @@
 import os
 
-from mcrcon import MCRcon
+from mcp_server.adapters.rcon import execute_rcon
 
 password = os.environ["MC_RCON_PASSWORD"]
 
-with MCRcon("127.0.0.1", password, port=25575) as rcon:
-    print(rcon.command("list"))
+print(execute_rcon("list", password,
+                   port=int(os.environ.get("MC_RCON_PORT", "25575")),
+                   timeout=float(os.environ.get("MC_RCON_TIMEOUT", "5"))))
