@@ -8,7 +8,13 @@ repositories {
     maven("https://repo.papermc.io/repository/maven-public/")
 }
 
-dependencies { compileOnly("io.papermc.paper:paper-api:1.20.1-R0.1-SNAPSHOT") }
+dependencies {
+    compileOnly("io.papermc.paper:paper-api:1.20.1-R0.1-SNAPSHOT")
+    testImplementation("io.papermc.paper:paper-api:1.20.1-R0.1-SNAPSHOT")
+    testImplementation(platform("org.junit:junit-bom:5.11.4"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
 
 java { toolchain.languageVersion.set(JavaLanguageVersion.of(17)) }
 
@@ -20,3 +26,5 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 tasks.jar { archiveFileName.set("craftmcp-debugger-sample.jar") }
+
+tasks.test { useJUnitPlatform() }
