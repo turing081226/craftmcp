@@ -6,6 +6,7 @@ group = 'local.craftmcp'
 version = '0.1.0'
 
 repositories {
+    mavenCentral()
     maven { url = 'https://repo.papermc.io/repository/maven-public/' }
 }
 
@@ -20,5 +21,14 @@ java {
 }
 
 tasks.withType(JavaCompile).configureEach {
+    options.release = 17
     options.encoding = 'UTF-8'
+    options.debug = true
+    options.debugOptions.debugLevel = 'source,lines,vars'
+}
+
+tasks.jar {
+    archiveFileName = 'plugin.jar'
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
 }
