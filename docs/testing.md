@@ -216,8 +216,29 @@ list 성공만으로 플러그인 계산·게임 상태 검증까지 통과했�
 ```
 
 공용 앱의 list_players는 소켓 작업을 별도 스레드에서 실행하므로 RCON 응답을 기다리는 동안
-디버거 도구를 호출할 수 있다. 실제 Paper에서 RCON 샘플 명령 → 중단 → 재개 → 최종 RCON 응답의
-전체 흐름은 별도 통합 시험이 필요하다.
+디버거 도구를 호출할 수 있다. B의 execute_command/get_job/cancel_job도 같은 앱에 등록된다.
+execute_command의 runtime_id는 mcp_server/.env의 MC_RUNTIME_ID(기본 default)와 같아야 한다.
+디버거 설정의 runtime ID도 같은 Paper를 가리키도록 맞춘다.
+
+실제 공용 MCP의 명령 job → 중단점 → 변수 조회 → 재개 → 최종 RCON 결과를 검증하려면:
+
+```powershell
+.\.venv\Scripts\python.exe tests/integration/probe_rcon_paper.py --server-dir mc_server --recoveries
+```
+
+driver가 원본 Paper를 임시 폴더에 복사하고 임시 포트·단일 runtime 환경을 구성한다.
+`--java <JDK17의 java.exe>`로 Java를 명시할 수 있다. 기본 실행부터 실제 B job을 사용하며
+시험용 job 앱으로 대체하지 않는다. sender·완료 표식·중단점·증거 연결은
+[D → B 계약](d-rcon-debugger-contract.md), 실행 결과는 [통합 검증 기록](d-rcon-debugger-validation.md)을 따른다.
+
+전체 Python 회귀 시험은 다음 두 경로를 각각 실행한다.
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p 'test_*.py' -v
+.\.venv\Scripts\python.exe -m unittest discover -s tests/debugger_python -p 'test_*.py' -v
+```
+
+첫 discovery에는 tests/integration의 D 계약·실제 job/loopback 시험도 포함된다.
 
 ### 로그 이어 읽기
 

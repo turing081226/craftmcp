@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path, PureWindowsPath
@@ -44,8 +45,10 @@ async def _lifespan(server):
     try:
         yield {"debugger": debugger_service}
     finally:
-        await job_manager.close()
-        await debugger_service.close()
+        try:
+            await debugger_service.close()
+        finally:
+            await job_manager.close()
 
 
 mcp = FastMCP(
@@ -127,13 +130,24 @@ async def _execute_job_command(command: str, timeout: float) -> str:
     password = os.environ.get("MC_RCON_PASSWORD")
     if not password:
         raise RuntimeError("MC_RCON_PASSWORD 환경변수가 설정되지 않았습니다.")
-    return await asyncio.to_thread(
+    cancelled = threading.Event()
+    worker = asyncio.create_task(asyncio.to_thread(
         execute_rcon,
         command,
         password,
         port=int(os.environ.get("MC_RCON_PORT", "25575")),
         timeout=timeout,
-    )
+        cancel_event=cancelled,
+    ))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        cancelled.set()
+        try:
+            await asyncio.shield(worker)
+        except Exception:
+            pass  # The socket worker has closed; the job owns the cancellation result.
+        raise
 
 
 job_manager = JobManager(_execute_job_command, default_commands())
@@ -166,6 +180,10 @@ async def execute_command(
 ) -> str:
     """허용된 명령을 비동기 job으로 시작하고 job 상태를 반환합니다."""
     try:
+        # Until A's registry is connected this app controls exactly one configured RCON target.
+        selected_runtime = os.environ.get("MC_RUNTIME_ID", "default")
+        if runtime_id != selected_runtime:
+            raise JobError(f"Unknown runtime_id: {runtime_id}; configured target is {selected_runtime}.")
         job = await job_manager.submit(
             command_id=command_id,
             arguments=arguments,
