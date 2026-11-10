@@ -1,1 +1,1 @@
-"""D-owned integration drivers. Test-only jobs must not be registered in production."""
+"""D-owned drivers and contract checks for the production RCON/debugger integration."""

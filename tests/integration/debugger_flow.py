@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import time
 import uuid
@@ -28,6 +29,8 @@ class DebuggerFlow:
 
     async def call(self, name, params, *, error=None):
         data = await self.call_tool(name, params)
+        if isinstance(data, str):
+            data = json.loads(data)
         self.record("tool_result", {"tool": name, "arguments": params, "response": data})
         if data.get("evidence"):
             self.bindings["debugger_run_id"] = data["evidence"]["run_id"]
@@ -38,7 +41,9 @@ class DebuggerFlow:
             return data["error"]
         if data.get("ok") is not True:
             raise AssertionError(f"{name} failed: {data}")
-        return data["result"]
+        # B's public job tools return a JSON string with job fields at the top level.
+        # Debugger tools and the D-only test seam use the existing result envelope.
+        return data.get("result", data)
 
     async def attach(self):
         attached = await self.call("attach_debugger", {"runtime_id": self.runtime_id, "project_id": self.project_id})

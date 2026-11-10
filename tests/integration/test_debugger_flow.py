@@ -1,6 +1,10 @@
+import json
 import unittest
 
-from debugger_flow import DebuggerFlow
+if __package__:
+    from .debugger_flow import DebuggerFlow
+else:
+    from debugger_flow import DebuggerFlow
 from mcp_server.services.debugger_fixture import BREAKPOINT_LINE, CLASS_NAME
 
 
@@ -69,6 +73,18 @@ class FakeTools:
 
 
 class DebuggerFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_production_json_string_job_envelope_is_supported(self):
+        fake = FakeTools()
+
+        async def call(name, params):
+            response = await fake.call(name, params)
+            if name in {"execute_command", "get_job"}:
+                return json.dumps({"ok": True, "stage": name, **response["result"]})
+            return response
+
+        flow = DebuggerFlow(call, lambda *args: None, runtime_id="fixture", project_id="sample", run_id="run-1")
+        self.assertEqual((await flow.run())["status"], "passed")
+
     async def test_fake_pending_job_does_not_block_debugger_and_regression_is_a_new_request(self):
         fake = FakeTools()
         evidence = []

@@ -1,12 +1,12 @@
 # D → B: RCON·디버거 통합 계약 v1
 
-작성일: 2026-11-10 (KST). 기준 작업 사본 HEAD: `212f707`.
+작성일: 2026-11-10 (KST). 통합 기준 main: `0e9f89f` (`B`).
 
 이 문서는 [4인 분업안](team-work-split-2026-11-03.md)의 D1–D3 및 B4 연결을 위한 인수 자료다.
-fixture 명령·출력·파서는 이 변경에 구현했다. `execute_command`/`get_job`의 아래 JSON은
-통합 driver가 요구하는 **연결 계약**이다. B의 실제 queue/journal/취소 구현이 완료됐다는 뜻이나
-B와 합의가 끝났다는 뜻은 아니다. 반환 모양이 다르면 driver의 `call_tool` 경계에서 변환한다.
-공용 Runtime/Job 모델을 D가 별도로 만들지 않는다.
+fixture 명령·출력·파서를 B의 실제 `JobManager`와 공용 MCP 앱에 연결했다.
+아래 JSON은 현재 구현의 공개 형식이다. B의 기존 JSON 문자열 반환 형식을 유지하며 driver가
+JSON을 디코딩한다. 공용 Runtime/Job 모델을 D가 별도로 만들지 않는다.
+전체 A registry나 job journal/재시작 복구가 구현됐다는 뜻은 아니다.
 
 ## 1. 실행할 명령과 sender
 
@@ -25,7 +25,7 @@ sender 검사와 별개이며 이 명령은 고정 덧셈만 수행하고 게임
 |---|---|
 | `command_id` | 고정 문자열 `debugger.calculate.v1` |
 | `arguments` | 정확히 `{"base": 7, "bonus": 3}`; 두 값 모두 signed int32; bool/float/string 불가 |
-| `runtime_id` | A가 제공하는 등록 서버 ID. 아래 예제는 시험용 `paper-rcon-fixture` |
+| `runtime_id` | 현재는 `MC_RUNTIME_ID`와 정확히 일치해야 한다. 아래 예제는 `paper-rcon-fixture` |
 | `run_id` | 외부 driver 생성; ASCII `[A-Za-z0-9_-]{1,64}`. 명령 인자로도 전달 |
 | `request_id` | 변경 요청 중복 방지 ID. 같은 ID/입력은 같은 job; 다른 입력은 거절 |
 | `timeout_seconds` | 첫 통합 기준 30초. queue·접속·인증·중단·조회·재개·응답을 포함한 총 기한 |
@@ -48,10 +48,10 @@ fixture 자체는 int32 입력을 받아 `Math.addExact`로 계산한다.
 }
 ```
 
-`execute_command`는 명령이 끝날 때까지 기다리지 않고 다음처럼 반환한다.
+`execute_command`는 명령이 끝날 때까지 기다리지 않고 다음 내용을 담은 JSON 문자열을 반환한다.
 
 ```json
-{"ok": true, "result": {"job_id": "job-example", "status": "queued"}}
+{"ok": true, "stage": "execute_command", "job_id": "job-example", "status": "queued"}
 ```
 
 `get_job({"job_id":"job-example"})`은 재전송 없이 상태를 반환한다. driver가 사용하는 최소 모양:
@@ -59,25 +59,34 @@ fixture 자체는 int32 입력을 받아 `Math.addExact`로 계산한다.
 ```json
 {
   "ok": true,
-  "result": {
-    "job_id": "job-example",
-    "runtime_id": "paper-rcon-fixture",
-    "run_id": "rcon-demo-001",
-    "request_id": "rcon-demo-001-debug",
-    "command_id": "debugger.calculate.v1",
-    "status": "running",
-    "send_status": "unknown",
-    "raw_output": "",
-    "parsed": null,
-    "error": null
-  }
+  "stage": "get_job",
+  "job_id": "job-example",
+  "runtime_id": "paper-rcon-fixture",
+  "run_id": "rcon-demo-001",
+  "request_id": "rcon-demo-001-debug",
+  "command_id": "debugger.calculate.v1",
+  "status": "running",
+  "sent": "unknown",
+  "execution_status": "unknown",
+  "timeout": 30,
+  "raw_output": "",
+  "parsed_output": null,
+  "errors": []
 }
 ```
 
 중단 중에는 `queued`/`running`; 정상 완료는 `succeeded`, 명령 오류는 `failed`, 판정 불가는
-`unknown`, 전송 전 취소는 `cancelled`다. `send_status`는 B가 관찰한 `not_sent`/`sent`/
-`confirmed`/`unknown`을 사용한다. D 시험용 seam은 어댑터의 예외만으로 전송 여부를 알 수
-없으므로 실행 중·전송 실패에 `unknown`을 사용한다. `confirmed`도 게임 assertion 성공과는 다르다.
+`unknown`, 전송 전 취소는 `cancelled`다. 현재 전송 상태는 `sent`와 동일 값의 `execution_status`로
+반환하며 `not_sent`/`unknown`/`confirmed`를 사용한다. 어댑터 호출 중에는 정확한 전송 시점을
+알 수 없어 unknown이다. `confirmed`도 게임 assertion 성공과는 다르다.
+`deadline_at`은 created_at+timeout인 Unix 시각이다. queue에서 기한이 만료되면 failed/not_sent,
+실행 중 기한 만료나 EOF는 unknown이며 자동 재전송하지 않는다.
+페이지는 `get_job(job_id, page=0, page_size=4000)`으로 조회한다.
+`output_has_more=true`면 다음 페이지를 읽는다. 이 fixture의 고정 응답은 한 페이지 안에 들어간다.
+
+A registry 연결 전 공용 앱은 환경변수의 단일 RCON 대상을 사용한다.
+`MC_RUNTIME_ID` 기본값은 `default`이고, 다른 runtime_id는 전송 전에 거절한다.
+동일 Paper의 DEBUGGER_CONFIG runtime ID·RCON 포트·MC_SERVER_DIR를 함께 설정해야 한다.
 
 ## 3. 완료 표식 및 결과 parser
 
@@ -177,6 +186,8 @@ lease는 **10초**, 명령 총 기한은 **30초**, 격리 Paper watchdog은 **6
 - 외부 `run_id`를 명령 인자, execute request, job 결과, 통합 증거의 run_id에 보존한다.
 - 같은 run의 디버깅·정상 재실행·복구 시험은 별도 request_id/job_id로 구분한다.
 - 같은 request_id의 조회/재요청은 같은 job으로 연결하고 실행하지 않는다. 다른 입력은 거절한다.
+  이 중복 방지는 같은 MCP 프로세스 안에서만 유지된다. journal이 없어 프로세스 재시작 뒤에는
+  이전 job을 복구할 수 없으므로, 응답을 잃은 변경 명령을 새 프로세스에 자동 재제출하지 않는다.
 - debugger 도구의 `evidence.run_id`는 기존 서비스 수명의 별도 ID다. 외부 run_id로 덮어쓰지 않는다.
   통합 증거의 `debugger_run_id`와 `debugger_evidence_path`로 매핑한다.
 - `id_binding` 레코드는 runtime_id/project_id/run_id/request_id/job_id/session_id/stop_id 및
@@ -195,7 +206,7 @@ lease는 **10초**, 명령 총 기한은 **30초**, 격리 Paper watchdog은 **6
 | 일치하는 최종 ok + 기대 변수 + 정상 재실행 | 해당 통합 범위 passed |
 | 일치하는 최종 error | 명령 failed. 예: int32 합 overflow |
 | terminal 누락/충돌·잘린 응답 | unknown. 자동 재전송하지 않음 |
-| 총 기한 만료 | job unknown; 실행 안 됨을 뜻하지 않음. 디버거 stop을 해제하고 원문/오류 보존 |
+| 총 기한 만료 | 전송 전 failed/not_sent, 실행 중 unknown. 디버거 stop을 해제하고 원문/오류 보존 |
 | EOF/전송 오류 | 실행 여부 unknown. 소켓 정리; 같은 변경 명령 자동 재전송 금지 |
 | 조회 assertion 실패 | 시험 failed; 명령 성공 여부와 별개. detach하고 실패 증거 보존 |
 | 중단 중 detach | held stop을 해제하고 기존 RCON 응답이 완료되는지 확인 |
@@ -220,21 +231,21 @@ lease는 **10초**, 명령 총 기한은 **30초**, 격리 Paper watchdog은 **6
 기존 서버 프로세스·월드·플러그인은 수정하지 않는다. 원본 EULA 수락이 없으면 실행을 거절한다.
 JDWP는 시험마다 빈 포트를 선택한 뒤 JVM에 그 번호를 명시해 detach 후에도 같은 주소로 재연결한다.
 `address=127.0.0.1:0`은 detach 때 새 포트를 선택할 수 있어 이 재연결 시험에는 사용하지 않는다.
-기본 실행의 job 구현은 **`tests/integration/fixture_app.py`의 시험용 seam**이다.
-이 앱은 실제 RCON/JDI를 호출하지만 B의 queue/journal/취소/재시작 복구를 대체하지 않는다.
+기본 실행은 **공용 `mcp_server.server`의 실제 B job 구현**을 사용한다.
+초기 D 독립 검증에 사용했던 시험용 job 앱은 제거했다. journal/프로세스 재시작 복구는 별도 후속 범위다.
 
 `--terminate-target`을 추가하면 마지막에 이 driver가 만든 격리 자식 Paper만 중단 상태에서
 강제 종료해 `vm_disconnected` 및 RCON job unknown을 확인한다. 이 실행의 정상 종료 표식은
 `shutdown=expected_target_termination`이다. 옵션이 없으면 Paper의 정상 stop을 확인한다.
 
-B가 공용 앱에 도구를 등록한 뒤 같은 절차를 다음으로 실행한다.
+기존 호출과의 호환성을 위해 다음 명시 플래그도 계속 받는다.
 
 ```powershell
 .\.venv\Scripts\python.exe tests/integration/probe_rcon_paper.py --server-dir mc_server --production-jobs --recoveries
 ```
 
-이 모드는 실제 `mcp_server.server`를 실행하며 도구가 없으면 실패한다. 시험용 job으로 자동 대체하지
-않는다. A의 registry가 별도 설정을 요구하면 이 driver의 격리 runtime 설정을 A 계약에 맞춰 연결한다.
-fixture가 공용 앱에 숨은 별도 도구로 등록되거나 C 자동 배포 완료를 기다릴 필요는 없다.
+플래그 유무에 관계없이 실제 공용 앱을 실행하며 필요한 도구가 없으면 실패한다.
+A의 registry가 제공되면 현재의 단일 MC_RUNTIME_ID 설정을 A 계약에 맞춰 연결한다.
+C 자동 배포 완료를 기다릴 필요는 없다.
 
 검증 결과와 미검증 범위는 [D 인수 검증 기록](d-rcon-debugger-validation.md)을 따른다.

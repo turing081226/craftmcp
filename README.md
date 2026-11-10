@@ -12,7 +12,7 @@
 
 [D → B RCON·디버거 통합 계약](docs/d-rcon-debugger-contract.md)에 실행할 fixture 명령,
 출력 파서, 중단점·기대 변수, ID 연결 및 실제 Paper 검증 절차를 정리했습니다.
-[검증 기록](docs/d-rcon-debugger-validation.md)은 시험용 job과 B의 실제 구현 검증을 구분합니다.
+[검증 기록](docs/d-rcon-debugger-validation.md)에서 B의 실제 job·공용 MCP 앱을 사용한 Paper 통합 결과를 확인할 수 있습니다.
 
 ## 각 파일의 역할
 

@@ -1,4 +1,70 @@
-# D RCON·디버거 인수 검증 기록
+# D·B 실제 RCON·디버거 통합 검증
+
+## 최신 통합 결과 — main의 B 구현 연결
+
+실행일: 2026-11-10 (KST). 통합 기준 main: `0e9f89f` (`B`) + D 변경.
+Python 3.12.15, Microsoft OpenJDK 17.0.18, Paper 1.20.1 build 196.
+공개 입력·출력과 실행 방법은 [통합 계약](d-rcon-debugger-contract.md)을 따른다.
+
+공용 `mcp_server.server`의 실제 B JobManager/명령 도구와 D fixture를 연결했다.
+실제 Paper/RCON/JDI/stdio MCP에서 job pending → 중단점 → 스택·변수·객체·배열 조회 →
+재개 → 같은 job의 최종 damage=10 → remove/detach → 새 job 정상 재실행이 통과했다.
+초기 D 독립 시험용 job 앱은 제거했다. 공개 job 응답은 B의 JSON 문자열/최상위 필드 형식을 유지했다.
+
+| 확인 | 결과 |
+|---|---|
+| tests 루트 discovery | **50개 통과**. 기존 B job·RCON/로그·빌드/배포 및 D 시험 포함 |
+| 디버거 discovery | **29개 통과, skipped=0**. 실제 Java 헬퍼/JDI 시험 7개 포함 |
+| D 통합 시험(위 50개에 포함) | 17개. 파서, driver/JSON 경계, 실제 JobManager, loopback EOF/timeout/종료 정리 |
+| 실제 fixture sender | 기존 명령 콘솔 성공·RCON 거절, 새 명령 콘솔 거절·RCON 성공 |
+| 실제 정상 명령 job | 중단 중 running, 재개 후 succeeded/confirmed, 기대 변수 일치 |
+| 실제 오류 명령 job | overflow를 parsed_output에 보존하고 failed로 반환 |
+| 참조 무효화 | 재개 후 이전 frame/object는 stale_reference |
+| detach·lease 복구 | held stop 해제 후 동일 RCON job 정상 완료, 이전 stop 조회 거절 |
+| session 교체 | 새 attach 후 이전 session은 session_not_found |
+| MCP client 종료 | held stop을 남기고 닫아도 독립 RCON 관찰자가 최종 성공 응답 수신 |
+| 중단 중 격리 Paper 종료 | helper disconnected/active_stop=null, 이전 stack 조회 vm_disconnected, B job unknown |
+| loopback 재전송 금지 | EOF/timeout 후 조회·동일 request 재요청에도 명령 수신 정확히 1회 |
+| 총 기한 | queue 만료는 미전송. 대기 시간을 뺀 남은 기한만 어댑터에 전달 |
+| socket 정리 | 30초 RCON 응답 대기 중 manager 종료 시 worker 취소·소켓 종료 확인 |
+
+JDK 17을 PATH에 둔 저장소 루트 PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p 'test_*.py' -v
+.\.venv\Scripts\python.exe -m unittest discover -s tests/debugger_python -p 'test_*.py' -v
+.\.venv\Scripts\python.exe tests/integration/probe_rcon_paper.py --server-dir mc_server --production-jobs --recoveries --terminate-target
+```
+
+실제 통합 run: `rcon-ac6552a324244e54b28b76d66e60891d`.
+status=`passed`, job_implementation=`production`, shutdown=`expected_target_termination`.
+마지막 종료는 driver가 만든 격리 자식만 중단 상태에서 강제 종료하는 의도된 복구 시험이다.
+`--terminate-target` 없이 실행하면 마지막에 정상 stop을 요청한다.
+
+증거는 `.cache/rcon-debugger/<run_id>/flow-evidence.jsonl`, `validation-summary.json`,
+`paper-console.jsonl`에 있다. 별도 debugger_run_id/경로는 tool 응답에 보존한다.
+자동 시험 출력은 `.cache/d-b-main-tests.log`, `.cache/d-b-debugger-tests.log`다.
+Paper와 샘플의 해시는 아래 초기 기록과 동일하며 복사/설치본 일치도 확인했다.
+
+이번에 수정한 B 통합 문제:
+
+- registry에 debugger.calculate.v1과 run-aware builder를 추가하고 D parser를 연결했다.
+- fixture terminal error/불완전 응답을 무조건 succeeded로 처리하지 않는다.
+- EOF·전송 오류는 실행 여부가 불명이므로 unknown으로 보존한다.
+- fingerprint에 run_id를 포함해 다른 실행이 같은 job으로 잘못 연결되지 않게 했다.
+- queue 대기도 총 기한에 포함하고 전송 전 만료된 명령은 실행하지 않는다.
+- 현재 단일 MC_RUNTIME_ID만 허용해 임의 ID가 같은 RCON으로 잘못 라우팅되지 않게 했다.
+- 종료 시 debugger를 먼저 닫고 finally에서 job을 정리한다. 취소된 RCON worker는 응답 대기에서
+  빠져나와 소켓을 닫는다. 이미 실행된 명령을 되돌렸다는 뜻은 아니다.
+
+남은 범위는 A의 다중 runtime registry, job journal/프로세스 재시작 복구, 실제 사용자 MCP 호스트,
+C 자동 배포까지 결합한 제작 반복, 실제 플레이어/GUI 검증이다.
+request_id 중복 방지는 현재 프로세스의 메모리 범위이며 프로세스 재시작 뒤에는 보장하지 않는다.
+이번 결과는 아래 초기 시험용 job 성공 기록을 실제 B 검증의 근거로 재사용하지 않았다.
+
+## 초기 D 독립 검증 기록 — 통합 전 이력
+
+아래는 B 연결 전의 과거 기록이다. 현재 구현/판정은 위 최신 결과를 따른다.
 
 실행일: 2026-11-10 (KST). 작업 사본 기준 `212f707` + 이 변경.
 Python 3.12.15, Microsoft OpenJDK 17.0.18, Paper 1.20.1 build 196.

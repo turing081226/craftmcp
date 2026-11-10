@@ -1,4 +1,4 @@
-"""Isolated real Paper/RCON/JDI + stdio MCP. Default jobs are explicitly test-only."""
+"""Isolated real Paper/RCON/JDI through B's jobs in the production stdio MCP app."""
 from __future__ import annotations
 
 import argparse
@@ -106,7 +106,7 @@ async def run(args):
     directory = ROOT / ".cache/rcon-debugger" / run_id
     directory.mkdir(parents=True)
     report = {"schema_version": 1, "run_id": run_id, "status": "failed", "target": "isolated real Paper",
-              "job_implementation": "production" if args.production_jobs else "D test-only in-memory seam",
+              "job_implementation": "production",
               "verification": {"production_B_jobs": "unknown", "user_MCP_host": "unknown", "real_player": "unknown",
                                "A_runtime_lifecycle": "unknown", "C_build_deploy": "unknown",
                                "server_exit_while_suspended": "unknown", "MCP_close_while_suspended": "unknown"},
@@ -194,9 +194,8 @@ async def run(args):
             "runtimes": {"paper-rcon-fixture": {"project_id": "debugger-sample", "host": "127.0.0.1", "port": jdwp_port,
                 "jar": str(directory / "paper.jar"), "boot_id": directory.name, "server_version": version}}}, indent=2), encoding="utf-8")
         env = {"DEBUGGER_CONFIG": str(config_path), "MC_RCON_PASSWORD": password, "MC_RCON_PORT": str(rcon_port),
-               "MC_RCON_TIMEOUT": "30", "MC_SERVER_DIR": str(directory)}
-        command_args = (["-m", "mcp_server.server"] if args.production_jobs else
-                        [str(ROOT / "tests/integration/fixture_app.py"), "--config", str(config_path), "--runtime", "paper-rcon-fixture"])
+               "MC_RCON_TIMEOUT": "30", "MC_SERVER_DIR": str(directory), "MC_RUNTIME_ID": "paper-rcon-fixture"}
+        command_args = ["-m", "mcp_server.server"]
         transport = StdioTransport(sys.executable, command_args, cwd=str(ROOT), env=env, keep_alive=False)
         async with Client(transport, timeout=15) as client:
             names = {tool.name for tool in await client.list_tools()}
@@ -210,7 +209,12 @@ async def run(args):
 
             flow = DebuggerFlow(call_tool, record, runtime_id="paper-rcon-fixture", project_id="debugger-sample", run_id=run_id)
             report["flow"] = await flow.run()
-            report["verification"]["production_B_jobs"] = "passed" if args.production_jobs else "unknown"
+            report["verification"]["production_B_jobs"] = "passed"
+            await flow.submit(arguments={"base": 2147483647, "bonus": 1})
+            failed_job = await flow.wait_job()
+            if failed_job["status"] != "failed" or failed_job["parsed_output"]["error"] != {"code": "INTEGER_OVERFLOW"}:
+                raise AssertionError("Production job did not preserve the fixture's terminal failure")
+            record("command_failure_passed", {"job": failed_job})
             if args.recoveries:
                 await recover(flow, record)
                 # Independent RCON observer survives host shutdown, proving the held JVM is released.
@@ -264,7 +268,7 @@ if __name__ == "__main__":
     parser.add_argument("--server-dir", type=Path, required=True)
     parser.add_argument("--java", default="java")
     parser.add_argument("--start-timeout", type=float, default=120)
-    parser.add_argument("--production-jobs", action="store_true", help="Require B's tools in the actual shared app; never fall back to test jobs")
+    parser.add_argument("--production-jobs", action="store_true", help="Compatibility flag: this probe now always uses the production shared app")
     parser.add_argument("--recoveries", action="store_true", help="Also test detach, old session, lease and MCP close on held Paper")
     parser.add_argument("--terminate-target", action="store_true", help="Finally terminate ONLY the isolated child while suspended; require unknown job + vm_disconnected")
     asyncio.run(run(parser.parse_args()))
