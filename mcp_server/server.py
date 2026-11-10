@@ -21,6 +21,7 @@ from mcp_server.adapters.rcon import execute_rcon
 from mcp_server.services.debugger import DebuggerConfig, DebuggerService
 from mcp_server.services.deployment import deploy
 from mcp_server.services.file_gate import FileGate
+from mcp_server.services.jobs import JobError, JobManager, default_commands
 from mcp_server.services.server_log import read_server_log
 from mcp_server.tools.debugger import register_debugger_tools
 
@@ -43,6 +44,7 @@ async def _lifespan(server):
     try:
         yield {"debugger": debugger_service}
     finally:
+        await job_manager.close()
         await debugger_service.close()
 
 
@@ -121,6 +123,22 @@ def _rcon_command(command: str) -> str:
     )
 
 
+async def _execute_job_command(command: str, timeout: float) -> str:
+    password = os.environ.get("MC_RCON_PASSWORD")
+    if not password:
+        raise RuntimeError("MC_RCON_PASSWORD 환경변수가 설정되지 않았습니다.")
+    return await asyncio.to_thread(
+        execute_rcon,
+        command,
+        password,
+        port=int(os.environ.get("MC_RCON_PORT", "25575")),
+        timeout=timeout,
+    )
+
+
+job_manager = JobManager(_execute_job_command, default_commands())
+
+
 def _find_built_jar(plugin_name: str) -> Path | None:
     project_root = Path(__file__).resolve().parents[1]
     jars = list(
@@ -135,6 +153,52 @@ def _find_built_jar(plugin_name: str) -> Path | None:
 async def list_players() -> str:
     """테스트 Minecraft 서버의 접속자 목록을 조회합니다."""
     return await asyncio.to_thread(_rcon_command, "list")
+
+
+@mcp.tool()
+async def execute_command(
+    command_id: str,
+    arguments: dict[str, object] | None = None,
+    runtime_id: str = "default",
+    request_id: str | None = None,
+    run_id: str | None = None,
+    timeout_seconds: float = 5,
+) -> str:
+    """허용된 명령을 비동기 job으로 시작하고 job 상태를 반환합니다."""
+    try:
+        job = await job_manager.submit(
+            command_id=command_id,
+            arguments=arguments,
+            runtime_id=runtime_id,
+            request_id=request_id,
+            run_id=run_id,
+            timeout=timeout_seconds,
+        )
+        return _result(ok=True, stage="execute_command", **job.as_dict())
+    except JobError as error:
+        return _result(ok=False, stage="execute_command", errors=[str(error)])
+
+
+@mcp.tool()
+async def get_job(job_id: str, page: int = 0, page_size: int = 4000) -> str:
+    """명령 job을 조회합니다. 조회는 명령을 재전송하지 않습니다."""
+    if page < 0 or not 1 <= page_size <= 10000:
+        return _result(ok=False, stage="get_job", errors=["page/page_size가 올바르지 않습니다."])
+    try:
+        job = await job_manager.get(job_id)
+        return _result(ok=True, stage="get_job", **job.as_dict(page=page, page_size=page_size))
+    except JobError as error:
+        return _result(ok=False, stage="get_job", errors=[str(error)])
+
+
+@mcp.tool()
+async def cancel_job(job_id: str) -> str:
+    """전송 전 job을 취소하거나 실행 중인 job을 unknown으로 표시합니다."""
+    try:
+        job = await job_manager.cancel(job_id)
+        return _result(ok=True, stage="cancel_job", **job.as_dict())
+    except JobError as error:
+        return _result(ok=False, stage="cancel_job", errors=[str(error)])
 
 
 @mcp.tool()
