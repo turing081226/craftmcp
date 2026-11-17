@@ -36,6 +36,7 @@ runtime 설정, build_id 기반 배포·롤백 및 실제 Paper 인수 시험을
 | `mc_server/server.properties.example` | 공통 서버 설정          | 실제 설정의 원본         |
 | `mcp_server/`                         | Python MCP 서버     | 디버거 MCP 도구와 프로세스 통신 |
 | `plugin_template/`                    | Paper 플러그인        | 디버거 콘솔 재현 샘플 포함 |
+| `plugin_template/blaze_fireball/`     | 예제 Paper 플러그인     | 블레이즈 막대기 파이어볼 ([README](plugin_template/blaze_fireball/README.md)) |
 | `eval/`                               | 테스트 시나리오 및 평가 코드  | 실험 결과 평가          |
 | `data/`                               | 실험 데이터            | 대용량 데이터는 별도 관리 고려 |
 
