@@ -126,11 +126,46 @@ Windows 교체가 실패한 `ab-d06fc627`은 성공 증거로 재사용하지 �
 제한 실행에서 비동기 MCP 시험이 멈추는 현상은 일반 권한 재실행과 구분했다.
 최종 표는 완료된 일반 권한 실행 결과이며 Authlib deprecation 경고는 시험 실패가 아니다.
 
+## 실제 Codex 호스트의 관리 서버 검증 — 2026-11-17 10:07–10:14 (KST)
+
+재연결된 이 채팅의 `mcp__craftmcp` 도구 21개를 직접 호출했다.
+별도 stdio client의 결과로 사용자 호스트 검증을 대신하지 않았다.
+원래 paper-local은 managed=false로 유지하고, 로컬 전용 paper-managed를 추가했다.
+시험 서버는 `.cache/mp-local/server`이며 기존 원본의 월드/플러그인을 복사하거나 변경하지 않았다.
+debugger.local.json/runtime.local.json과 Codex craftmcp env의 설정 경로를 반영한 뒤 재연결했다.
+
+| 확인 | 실제 호스트 결과 |
+|---|---|
+| 도구와 대상 | 21개 발견, paper-managed의 managed/start/stop=true |
+| MCP 시작 | start_server job succeeded, owned_process running, 현재 boot의 game_ready=true |
+| RCON 명령 | list_players job succeeded, online=0/max=20 |
+| 실제 디버거 | 중단 중 job=running, base=7/bonus=3/damage=10, result와 inputs=[7,3], 명시적 재개 후 같은 job succeeded |
+| 참조 무효화 | 재개 후 이전 frame은 stale_reference |
+| 실제 빌드 | HostManagedProbe 1.0/2.0 모두 공용 build_plugin job succeeded, Java 17 줄/지역 변수 정보 확인 |
+| 최초 배포 | 1.0의 정확한 build_id 배포, 새 boot에서 enabled=true/version=1.0, 로그 marker=10 |
+| 중단 중 업데이트 | 실제 stop을 runtime status로 확인한 뒤 2.0 배포, 원래 명령 job succeeded, 새 boot enabled=true/version=2.0, 로그 marker=20 |
+| 롤백 | 2.0 deployment_id로 1.0 복원, enabled=true/version=1.0, 로그 marker=10, 최초 빌드 JAR 해시 일치 |
+| 재시작 후 참조 | 배포 전 stop 조회는 vm_disconnected |
+| MCP 정상 종료 도구 | stop_server succeeded, exit_confirmed=true/pid=null/exit_code=0, 최종 process=stopped |
+| 원본 보존 | 원본 paper.jar/server.properties/eula.txt SHA-256 일치 |
+
+run_id: `codex-managed-1794877666399`.
+1.0 build_id: `6e32f110f1644f9bb44f8f2b983a7714`.
+2.0 build_id: `983e0c8b7b43447bb08e56cb9ef087c0`.
+2.0 deployment_id: `042f5869ae6d4d84ba623bef23d812a3`.
+debugger evidence run: `266dc1840ee840e28d1645cd90fc879d`.
+
+호출 원문과 요약은 `.cache/mp-local/codex-managed-1794877666399/flow-evidence.jsonl`,
+`validation-summary.json`에 저장했다. 별도 debugger 원문은
+`data/debugger/266dc1840ee840e28d1645cd90fc879d/evidence.jsonl`에 있다.
+설정은 유지하고 시험 서버는 종료했다. 다음 start_server 호출 시 새 소유 부팅으로 시작한다.
+빌드의 source_revision.head/dirty는 null로 남았고, source_sha256/artifact_sha256으로 산출물을 연결했다.
+관찰하지 못한 Git 상태나 실행 bytecode 해시를 확인했다고 주장하지 않는다.
+
 ## 검증 한계
 
-새 통합의 실제 호스트 경계는 공용 stdio MCP client다. 기존 Codex 연결의 15개 도구 핵심 흐름과
-lease/detach 결과는 별도 [D 검증 기록](d-rcon-debugger-validation.md)에 있다.
-새 21개 도구의 Codex 연결 재발견은 MCP 재연결 후 별도 확인한다.
+공용 stdio MCP의 실패/종료 시험과 위 실제 Codex 21개 도구의 관리 서버 시험을 구분한다.
+기존 Codex 연결의 lease/detach 결과는 별도 [D 검증 기록](d-rcon-debugger-validation.md)에 있다.
 실제 플레이어/GUI, 범용 game-state/reset/evidence 도구, 영속 job 복구는 이 통합 범위가 아니다.
 최종 원격 확인에서 추가로 발견한 C `b68896d`는 인계 문서만 추가한 커밋이며 제품 코드 차이는 없다.
 해당 문서와 커밋 이력도 포함했다. Paper API SNAPSHOT과 전이 의존성 전체의 바이트 고정은 C의 후속 범위다.
