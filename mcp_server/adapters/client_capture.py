@@ -10,8 +10,26 @@ import os
 import struct
 import zlib
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import PureWindowsPath
+
+WS_EX_TOPMOST = 0x00000008
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_LAYERED = 0x00080000
+
+
+def is_passive_overlay(ex_style: int) -> bool:
+    """Layered click-through or topmost tool overlays (recorders, vendor HUDs).
+
+    These cover the whole desktop on many PCs (e.g. Medal, GeForce, Discord, OEM
+    display helpers) but are normally transparent, so they are reported as a
+    warning instead of blocking every capture. Ordinary app windows still block.
+    """
+    if not ex_style & WS_EX_LAYERED:
+        return False
+    return bool(ex_style & WS_EX_TRANSPARENT) or (
+        bool(ex_style & WS_EX_TOPMOST) and bool(ex_style & WS_EX_TOOLWINDOW))
 
 
 class CaptureError(RuntimeError):
@@ -83,6 +101,7 @@ class WindowsClientCapture:
         api(self.user, "GetClientRect", [w.HWND, ctypes.POINTER(w.RECT)], w.BOOL)
         api(self.user, "GetWindowRect", [w.HWND, ctypes.POINTER(w.RECT)], w.BOOL)
         api(self.user, "ClientToScreen", [w.HWND, ctypes.POINTER(w.POINT)], w.BOOL)
+        api(self.user, "GetWindowLongPtrW", [w.HWND, ctypes.c_int], ctypes.c_ssize_t)
         api(self.user, "GetDC", [w.HWND], w.HDC)
         api(self.user, "ReleaseDC", [w.HWND, w.HDC], ctypes.c_int)
         api(self.user, "GetSystemMetrics", [ctypes.c_int], ctypes.c_int)
@@ -161,7 +180,13 @@ class WindowsClientCapture:
                 continue
         return clients
 
-    def _ready(self, client: ClientWindow):
+    def _window_title(self, hwnd) -> str:
+        title, kind = ctypes.create_unicode_buffer(256), ctypes.create_unicode_buffer(256)
+        self.user.GetWindowTextW(hwnd, title, len(title))
+        self.user.GetClassNameW(hwnd, kind, len(kind))
+        return title.value or kind.value
+
+    def _ready(self, client: ClientWindow, overlays: list[str] | None = None):
         current = self._inspect(client.handle)
         if current.identity != client.identity:
             raise CaptureError("stale_client", "Game process identity changed; list clients again.")
@@ -189,7 +214,13 @@ class WindowsClientCapture:
             other = self.w.RECT()
             if self.user.GetWindowRect(hwnd, ctypes.byref(other)):
                 if max(left, other.left) < min(right, other.right) and max(top, other.top) < min(bottom, other.bottom):
-                    raise CaptureError("client_occluded", "Another window overlaps the game; clear it before capturing.")
+                    if is_passive_overlay(self.user.GetWindowLongPtrW(hwnd, -20) & 0xFFFFFFFF):  # GWL_EXSTYLE
+                        if overlays is not None:
+                            overlays.append(self._window_title(hwnd))
+                        continue
+                    raise CaptureError(
+                        "client_occluded",
+                        f"Another window overlaps the game ({self._window_title(hwnd)!r}); clear it before capturing.")
         return bounds
 
     def _copy_pixels(self, source_dc, rect) -> CapturedFrame:
@@ -233,7 +264,8 @@ class WindowsClientCapture:
 
     def capture(self, client: ClientWindow) -> CapturedFrame:
         with self._dpi():
-            rect = self._ready(client)
+            overlays: list[str] = []
+            rect = self._ready(client, overlays)
             screen = self.user.GetDC(None)
             if not screen:
                 raise CaptureError("capture_failed", "An interactive desktop session is required.")
@@ -243,4 +275,7 @@ class WindowsClientCapture:
                 self.user.ReleaseDC(None, screen)
             if self._ready(client) != rect:
                 raise CaptureError("client_changed", "The game window moved during capture; frame discarded.")
+            if overlays:
+                names = ", ".join(sorted(set(overlays)))
+                frame = replace(frame, warnings=frame.warnings + (f"overlay_windows_present: {names}",))
             return frame

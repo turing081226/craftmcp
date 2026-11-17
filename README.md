@@ -49,6 +49,18 @@ runtime 설정, build_id 기반 배포·롤백 및 실제 Paper 인수 시험을
 .\.venv\Scripts\python.exe -m mcp_server.server
 ```
 
+### Claude Code 등 MCP 호스트에 연결
+
+1. `uv sync --locked --python python`으로 `.venv`를 만든다.
+2. `mcp_server/.env.example`을 `mcp_server/.env`로 복사하고 `MC_SERVER_DIR`(각자의 절대 경로)와 `MC_RCON_PASSWORD`를 채운다.
+3. `.mcp.example.json`을 `.mcp.json`으로 복사하고 `C:/path/to/craftmcp`를 각자 clone한 경로로 바꾼다.
+   `.mcp.json`과 `.env`는 PC마다 다르므로 커밋하지 않는다(`.gitignore` 처리됨).
+4. 호스트를 재시작한다. 첫 기동은 라이브러리 로딩으로 10~30초 걸릴 수 있어 `.claude/settings.json`에서
+   MCP 연결 제한을 90초(`MCP_TIMEOUT`)로 늘려 두었다.
+
+AI가 게임 창을 불러오고 명령어 입력·이동·클릭까지 하게 하려면 `mcp_server/.env`에
+`CRAFTMCP_GAME_INPUT=1`을 추가한다. 자세한 내용과 안전장치는 [캡처·게임 입력 문서](docs/client-capture.md#게임-입력)를 참고한다.
+
 JVM 디버거를 사용하려면 먼저 Java 헬퍼를 빌드합니다.
 
 ```powershell

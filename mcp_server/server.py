@@ -17,6 +17,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# Startup must finish within the MCP host's connect timeout (Claude Code: 30s).
+# FastMCP otherwise performs a synchronous PyPI version check and prints a banner
+# on every launch; neither is useful for a local stdio tool server.
+os.environ.setdefault("FASTMCP_CHECK_FOR_UPDATES", "off")
+os.environ.setdefault("FASTMCP_SHOW_CLI_BANNER", "false")
+
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 from mcp_server.adapters.rcon import execute_rcon
@@ -32,6 +38,8 @@ from mcp_server.services.server_log import read_server_log
 from mcp_server.tools.debugger import register_debugger_tools
 from mcp_server.services.client_capture import ClientCaptureService
 from mcp_server.tools.client_capture import register_client_capture_tools
+from mcp_server.services.game_input import GameInputService
+from mcp_server.tools.game_input import register_game_input_tools
 from mcp_server.tools.runtime import register_runtime_tools
 from mcp_server.tools.plugins import register_plugin_tools
 
@@ -80,7 +88,9 @@ mcp = FastMCP(
 )
 register_debugger_tools(mcp, debugger_service)
 client_capture_service = ClientCaptureService(PROJECT_ROOT)
-register_client_capture_tools(mcp, client_capture_service)
+game_input_service = GameInputService(client_capture_service)
+register_client_capture_tools(mcp, client_capture_service, focus=game_input_service.focus)
+register_game_input_tools(mcp, game_input_service)
 MAX_LOG_LINES = 1000
 PLUGIN_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 JAVA_CLASS_PATTERN = re.compile(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$")
@@ -519,4 +529,4 @@ async def deploy_plugin(plugin_name: str) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    mcp.run(transport="stdio", show_banner=False)

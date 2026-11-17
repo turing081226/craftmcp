@@ -82,12 +82,14 @@ Copy-Item debugger.example.json debugger.local.json
 
 stdio 서버는 MCP 클라이언트가 실행하고 호출하는 프로세스다. 터미널에서 직접 실행하는 것만으로 도구 호출 시험이 되지는 않는다. 호스트 등록 예제:
 
+`<저장소 경로>`는 각자 clone한 절대 경로로 바꾼다.
+
 ```json
 {
   "mcpServers": {
     "craftmcp-debugger": {
-      "command": "C:/Users/yjkim/Desktop/craftmcp/.venv/Scripts/python.exe",
-      "args": ["-m", "mcp_server.debugger_app", "--config", "C:/Users/yjkim/Desktop/craftmcp/debugger.local.json", "--workspace", "C:/Users/yjkim/Desktop/craftmcp"]
+      "command": "<저장소 경로>/.venv/Scripts/python.exe",
+      "args": ["-m", "mcp_server.debugger_app", "--config", "<저장소 경로>/debugger.local.json", "--workspace", "<저장소 경로>"]
     }
   }
 }
@@ -153,14 +155,14 @@ CRAFTDEBUG status=ok run_id=manual-001 damage=10
 제공한 Paper 바이너리로 전체 흐름을 자동 검증할 때:
 
 ```powershell
-.\.venv\Scripts\python.exe tests/debugger_python/probe_paper.py --server-dir C:/Users/yjkim/Desktop/mc_server
+.\.venv\Scripts\python.exe tests/debugger_python/probe_paper.py --server-dir <Paper 서버 폴더>
 ```
 
 드라이버는 기존에 EULA를 수락한 서버의 동일 paper.jar와 캐시·라이브러리를 작업 폴더의 `.cache/paper-debugger/<run_id>`로 복사한다. 월드·사용자 데이터·기존 플러그인은 복사하지 않는다. 새 테스트 월드, RCON=false, localhost의 임시 게임/JDWP 포트, 테스트 플러그인을 사용한다.
 
 중단점 없는 baseline → 실제 stdio MCP 조사 → 재개 후 콘솔 정상 완료 → 중단점 없는 regression → 서버 정상 종료를 검증한다. Paper 버전, 원본·검증 JAR 해시, 빌드·배포 플러그인 해시, 입력·기대값·관찰값과 정상 종료를 paper-validation-summary.json에 남긴다. 기존 서버에서의 검증과 구분한다.
 
-사용자가 알려준 `/C/Users/yjkim/Desktop/mc_server`는 Windows의 `C:/Users/yjkim/Desktop/mc_server`로 해석했다. 25565에서 Paper 1.20.1 build 196이 실행 중이며 실행 인자에 JDWP가 없음을 확인했다. 25565는 게임 포트로 사용되고 있다. 기존 인스턴스에 디버거를 연결하려면 정상 종료 후 다음 JVM 옵션을 넣고 재시작해야 한다.
+당시 검증에서는 사용자가 알려준 `/C/Users/<사용자>/Desktop/mc_server`를 Windows의 `C:/Users/<사용자>/Desktop/mc_server`로 해석했다. 25565에서 Paper 1.20.1 build 196이 실행 중이며 실행 인자에 JDWP가 없음을 확인했다. 25565는 게임 포트로 사용되고 있다. 기존 인스턴스에 디버거를 연결하려면 정상 종료 후 다음 JVM 옵션을 넣고 재시작해야 한다.
 
 ```text
 -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:5005

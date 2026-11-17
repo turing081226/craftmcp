@@ -20,7 +20,8 @@ Description = Annotated[StrictStr, Field(min_length=1, max_length=4000)]
 Label = Annotated[StrictStr, Field(min_length=1, max_length=200)]
 
 
-def register_client_capture_tools(mcp: FastMCP, service: ClientCaptureService):
+def register_client_capture_tools(mcp: FastMCP, service: ClientCaptureService, focus=None):
+    """focus: optional callable(client_id) that brings the game window forward before capture."""
     async def call(operation, *, image=False):
         try:
             value = await anyio.to_thread.run_sync(operation)
@@ -44,14 +45,24 @@ def register_client_capture_tools(mcp: FastMCP, service: ClientCaptureService):
     @mcp.tool()
     async def capture_game_view(client_id: ID, run_id: ID, label: Label, runtime_id: ID | None = None,
                                 build_id: ID | None = None, deployment_id: ID | None = None,
-                                delay_seconds: Annotated[StrictInt, Field(ge=0, le=10)] = 0) -> ToolResult:
+                                delay_seconds: Annotated[StrictInt, Field(ge=0, le=10)] = 0,
+                                focus_window: bool = True) -> ToolResult:
         """Capture a visible foreground Minecraft client area and return the PNG plus evidence metadata.
 
-        Bring the game forward manually; this tool does not change focus or send input.
+        With focus_window (default) the game window is restored and brought forward automatically first;
+        no keys or clicks are sent. Set focus_window=false to leave window focus to the user.
         Correlation IDs are caller-supplied references, not proof of server/build identity.
         Capture success is not a plugin assertion; inspect the image and query game state.
-        delay_seconds gives the user up to ten seconds to switch back to the game.
+        delay_seconds waits before capturing (e.g. for an animation, or for the user to switch manually).
         """
+        if focus_window and focus is not None:
+            try:
+                await anyio.to_thread.run_sync(focus, client_id)
+            except (CaptureError, OSError) as error:
+                value = response(ok=False, error={"code": getattr(error, "code", "focus_failed"), "message": str(error)},
+                                 functional_result="unknown")
+                return ToolResult(content=[TextContent(type="text", text=json.dumps(value, ensure_ascii=False))],
+                                  structured_content=value)
         if delay_seconds:
             await anyio.sleep(delay_seconds)
         return await call(partial(service.capture, client_id, run_id, label, runtime_id=runtime_id,

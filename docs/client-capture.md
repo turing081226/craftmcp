@@ -2,12 +2,13 @@
 
 작성일: 2026-11-17 (KST)
 
-최신 main 통합 후 공용 앱은 runtime/job/플러그인/디버거 도구와 캡처 도구를 합쳐 26개를 제공한다.
+공용 앱은 runtime/job/플러그인/디버거 도구, 캡처 도구 5개, 창 포커스·게임 입력 도구 3개를 합쳐 29개를 제공한다.
 통합 범위와 재검증은 [C/main 통합 기록](c-main-integration-2026-11-17.md)을 참고한다.
 
 실행 중인 Minecraft Java 창의 화면을 촬영하고, MCP의 PNG 이미지 응답으로 AI에게 전달한다.
 AI 또는 사용자가 확인한 시각 판정을 스크린샷과 연결해 기록할 수 있다. 캡처 성공과 서버 기능 성공은
-별도로 다루며, 이 도구 안에서 외부 비전 모델을 호출하거나 게임 입력을 자동 실행하지 않는다.
+별도로 다루며, 이 도구 안에서 외부 비전 모델을 호출하지 않는다. 촬영 전에는 게임 창을 자동으로 앞으로
+가져온다(`focus_window=false`로 끌 수 있음). 키보드·마우스 입력은 아래 [게임 입력](#게임-입력)에서 opt-in으로 켠다.
 
 ## 준비
 
@@ -28,7 +29,7 @@ AI 또는 사용자가 확인한 시각 판정을 스크린샷과 연결해 기�
 | 도구 | 입력 | 반환 |
 |---|---|---|
 | `list_game_clients` | 없음 | client_id, 창 제목, PID, 실행 파일 이름, 창 클래스 |
-| `capture_game_view` | client_id, run_id, label; 선택 runtime_id/build_id/deployment_id/delay_seconds | PNG 이미지 콘텐츠와 구조화된 증거 메타데이터 |
+| `capture_game_view` | client_id, run_id, label; 선택 runtime_id/build_id/deployment_id/delay_seconds/focus_window(기본 true) | PNG 이미지 콘텐츠와 구조화된 증거 메타데이터 |
 | `get_game_capture` | run_id, capture_id | 해시를 재검증한 기존 PNG 및 메타데이터 |
 | `record_visual_assertion` | run_id, capture_id, expected, observed, verdict | 호출자가 판단한 passed/failed/unknown 시각 판정 기록 |
 | `get_visual_run_evidence` | run_id; 선택 offset=0, limit=20 | 시간순 촬영·시각 판정 메타데이터 페이지, next_offset |
@@ -112,6 +113,46 @@ Windows 예약 이름은 거절한다. 파일 저장 경로는 호출자가 지�
 run당 최대 1000개 기록, PNG 최대 8 MiB, 조회 페이지 최대 100개를 적용한다.
 백엔드가 생성한 실제 촬영과 테스트용 결과는 `simulated`로 구분한다.
 
+## 게임 입력
+
+AI가 게임 창을 스스로 불러오고, 플레이어로서 명령어 입력·이동·시점 회전·클릭을 할 수 있다.
+
+| 도구 | 설명 |
+|---|---|
+| `focus_game_window` | 최소화 해제 후 게임 창을 전경으로 가져온다. 키·클릭은 보내지 않는다. 항상 사용 가능 |
+| `send_game_input` | `actions` 배열을 순서대로 실행: `key`(keys, hold_ms), `click`(left/right/middle, hold_ms, count), `look`(dx, dy), `scroll`(amount), `type_text`(text), `wait`(ms) |
+| `run_game_chat_command` | T → 텍스트 입력 → Enter. `/heal 4`처럼 RCON으로 실행할 수 없는 플레이어 전용 명령에 사용 |
+
+입력 도구는 `mcp_server/.env`에 `CRAFTMCP_GAME_INPUT=1`을 넣고 MCP 서버를 재시작해야 동작한다
+(없으면 `input_disabled`). 로그인한 플레이어 권한으로 실행되므로 공용 PC에서는 켜지 않는다.
+
+안전장치:
+
+- 목록에서 선택한 창(핸들·PID·프로세스 시작 시각 일치)에만 입력한다. 다른 창에는 보내지 않는다.
+- 매 동작 전과 키를 누르고 있는 동안 게임 창이 전경인지 확인한다. 사용자가 다른 창으로 바꾸면
+  `focus_lost`로 즉시 멈추고, 누른 키·버튼은 항상 뗀다.
+- 호출당 동작 50개, 누름·대기 합계 30초, 텍스트 256자(줄바꿈 금지), 시점 이동 ±3000 제한.
+- 결과는 `functional_result: "unknown"`이다. 입력 전달은 게임 결과의 증거가 아니므로 캡처·로그로 확인한다.
+
+사용 팁:
+
+- 게임이 포커스를 잃으면 Minecraft가 **게임 메뉴**(일시정지 화면)를 연다. 창을 불러온 뒤 캡처해 메뉴가
+  보이면 `escape` 키를 보내 게임으로 돌아간다. F3+P로 `pauseOnLostFocus`를 끄면 메뉴가 열리지 않는다.
+- 기본 조작: w/a/s/d 이동, space 점프, shift 웅크리기, ctrl 달리기, e 인벤토리, q 버리기, 1~9 핫바.
+  좌클릭은 공격·채굴(블록을 부수려면 hold_ms 1000~3000), 우클릭은 사용·설치.
+- `look`은 원시 마우스 이동량이다. 회전 각도는 마우스 감도에 따라 다르므로 캡처로 보정한다.
+- 게임이 관리자 권한으로 실행 중이면 Windows(UIPI)가 입력을 막는다(`input_blocked`).
+
+예: 앞으로 1초 걸으며 오른쪽으로 돌고 블록 우클릭
+
+```json
+{"client_id": "목록에서_받은_ID", "actions": [
+  {"type": "key", "keys": ["w"], "hold_ms": 1000},
+  {"type": "look", "dx": 300},
+  {"type": "click", "button": "right"}
+]}
+```
+
 ## 실패와 한계
 
 | 코드/경고 | 의미와 조치 |
@@ -119,10 +160,13 @@ run당 최대 1000개 기록, PNG 최대 8 MiB, 조회 페이지 최대 100개�
 | `unknown_client` / `stale_client` | 게임 창 목록을 다시 조회하고 선택 |
 | `client_not_foreground` | Minecraft를 전경으로 전환; 필요하면 촬영 지연 사용 |
 | `client_not_visible` | 최소화/숨김 상태를 해제 |
-| `client_occluded` | 게임 위에 겹친 다른 창을 치운 뒤 재시도 |
+| `client_occluded` | 게임 위에 겹친 다른 창(메시지에 창 이름 표시)을 치운 뒤 재시도 |
+| `overlay_windows_present: …` | 녹화·제조사 HUD 같은 투명 오버레이(`WS_EX_LAYERED` + 클릭 통과, 또는 최상위 도구 창)가 겹쳐 있으나 촬영은 진행함. 오버레이가 그린 내용은 이미지에 포함될 수 있으니 확인 |
 | `client_offscreen` | 창 전체가 모니터 영역 안에 오도록 이동 |
 | `client_changed` | 촬영 중 창 위치가 바뀜; 해당 프레임은 저장하지 않음 |
 | `capture_busy` | 진행 중인 촬영이 끝난 뒤 요청 |
+| `focus_failed` | Windows가 창 전환을 거부함; 게임 창을 한 번 직접 클릭 |
+| `focus_lost` / `input_busy` / `input_disabled` | 입력 중 창 전환됨 / 다른 입력 진행 중 / `CRAFTMCP_GAME_INPUT=1` 필요 |
 | `possible_blank_frame` | 단색 프레임; 게임 렌더링이 정상 수집됐는지 이미지를 보고 확인 |
 | `evidence_modified` | 저장한 PNG가 변경됨; 새 캡처로 증거 생성 |
 
