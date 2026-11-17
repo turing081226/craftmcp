@@ -1,6 +1,77 @@
 # D·B 실제 RCON·디버거 통합 검증
 
-## 최신 통합 결과 — main의 B 구현 연결
+A·B·C·D를 결합한 새 공용 앱의 stdio/Paper 검증은
+[2026-11-17 통합 결과](integration-2026-11-17.md)에 별도로 기록했다.
+아래 Codex 호스트 결과는 당시 연결된 도구를 직접 호출한 이력이다.
+
+## 최신 통합 결과 — 실제 Codex MCP 호스트
+
+실행일: 2026-11-17 08:55 (KST). 저장소 HEAD: `6c9ce97ec13b49e0ddfc7dce8200fb09fc96106a`.
+사용자가 `mc_server/start-debug.bat --no-pause`로 시작한 Paper 1.20.1 build 196에
+이 Codex 채팅의 연결된 `mcp__craftmcp` 도구로 직접 호출했다. 별도 stdio 시험 client로
+대체하지 않았다. 서버 시작 로그의 Java는 HotSpot 25.0.2이며 기존 Java 17 검증과 구분한다.
+
+| 확인 | 결과 |
+|---|---|
+| 연결 대상 | debugger와 명령 job 모두 `paper-local`, project=`debugger-sample` |
+| 실제 중단점 | `DamageCalculator.calculate`, 7번 줄, verified 후 실제 stop 관찰 |
+| 중단 중 job | 동일 job이 `running`인 동안 stack/variables 도구 응답 |
+| 지역 변수 | runId 일치, base=7, bonus=3, damage=10 |
+| 객체·배열 | result의 base=7, bonus=3, damage=10, runId 일치; inputs=[7, 3] |
+| 재개·완료 | 명시적 resume 후 같은 job이 succeeded/confirmed, parsed damage=10 |
+| 정상 재실행 | 중단점 제거·detach 후 새 request/job이 succeeded/confirmed, damage=10 |
+| 정리 | 중단점 제거·debugger detach 완료. 사용자가 시작한 Paper 서버는 실행 유지 |
+
+run_id: `codex-host-20261117-02`.
+debug job: `b8a70292-c432-4d45-848e-a720f4eb4515`.
+regression job: `887dc26a-c8fd-4794-a269-f8b65c062b58`.
+session: `session-70543e49-211a-485d-b588-e54fc7354d89`.
+stop: `stop-dfce422b-12d1-421f-8f0a-016b75eed6c9`.
+debugger evidence run: `a9c7a8a22b854faaa45c2723f8ec35b7`.
+
+도구 호출 원문과 요약은 `.cache/rcon-debugger/codex-host-20261117-02/flow-evidence.jsonl`,
+`validation-summary.json`에 저장했다. 디버거 원문은
+`data/debugger/a9c7a8a22b854faaa45c2723f8ec35b7/evidence.jsonl`에 있다.
+사전 호출의 runtime_id=`default`는 설정 대상 `paper-local`과 달라 job 생성 전에 거절됐으며,
+올바른 대상으로 호출한 결과를 위 표에 기록했다.
+
+판정: 실제 사용자 MCP 호스트에서 v0 핵심 흐름을 확인했다. 실제 플레이어/GUI,
+A의 runtime 수명 관리, C의 자동 빌드·배포는 이번 시험 범위에 포함하지 않았다.
+위 기본 흐름에서는 복구 시험을 제외했다. 이후의 lease·detach 복구 결과는 아래에 별도 기록한다.
+Java 25에서 이 샘플이 통과한 결과이며 전체 Paper/플러그인 호환성을 보장하지 않는다.
+
+### 실제 Codex 호스트 복구 시험 — 2026-11-17 09:01–09:03 (KST)
+
+동일한 사용자 Paper 서버와 연결된 `mcp__craftmcp` 도구를 사용했다.
+서버 종료·재시작이나 MCP 프로세스 종료 없이 두 복구 경로를 확인했다.
+
+| 시나리오 | 관찰 및 판정 |
+|---|---|
+| lease 만료 | 중단 중 job=running, stop의 10초 기한 만료 후 active_stop=null. resume 호출 0회로 같은 job succeeded/confirmed, damage=10 |
+| 만료 후 참조 | 이전 frame_id와 result object_ref 조회 모두 stale_reference |
+| 중단 중 detach | 반환된 released_stop_ids에 실제 stop 포함. 같은 job succeeded/confirmed, damage=10 |
+| detach 후 stop 조회 | vm_disconnected로 거절 |
+| 새 attach 후 이전 session 조회 | 새 session_id 발급, 이전 session은 session_not_found로 거절 |
+| 정리 | lease 시험의 중단점 제거 및 detach, detach 시험·재연결 session도 detach 완료. 사용자 서버 실행 유지 |
+
+lease run: `codex-host-lease-1794873683939`,
+job: `58ae26a8-e60e-4be2-81d2-4dda7ca89e9c`.
+detach run: `codex-host-detach-1794873737991`,
+job: `da79713d-2bb1-45b8-be73-9a60026fd3b9`.
+각 run의 `.cache/rcon-debugger/<run_id>/validation-summary.json`, `flow-evidence.jsonl`에
+요약과 도구 호출 기록을 저장했다. debugger evidence run은 위 기본 흐름과 동일하다.
+
+detach 시험의 최초 임시 검증 코드는 stale_reference를 기대해 assertion이 실패했다.
+Java `DebuggerEngine.requireStop`이 연결 여부를 먼저 확인하므로 detach 직후에는
+vm_disconnected가 맞다. 기대값을 바로잡아 이전 stop 조회를 재확인했고,
+명령 재전송 없이 새 attach 후 이전 session 거절까지 확인했다. 최초 오류도 원문에 보존했다.
+
+남은 D5 범위: 실제 Codex MCP 연결 종료 시 정리와 중단 중 대상 서버 종료 복구.
+별도 stdio client/격리 Paper의 기존 검증과 이 사용자 호스트 검증을 구분한다.
+A의 runtime 수명 관리, C의 자동 빌드·배포, 실제 플레이어/GUI 및 D6 이후의
+상태 조회·초기화·증거 도구는 여전히 이번 시험 범위 밖이다.
+
+## 이전 통합 결과 — main의 B 구현 연결
 
 실행일: 2026-11-10 (KST). 통합 기준 main: `0e9f89f` (`B`) + D 변경.
 Python 3.12.15, Microsoft OpenJDK 17.0.18, Paper 1.20.1 build 196.

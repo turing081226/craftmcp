@@ -42,6 +42,7 @@ class Job:
     arguments: dict[str, Any]
     timeout: float
     fingerprint: str
+    mutating: bool = False
     status: str = "queued"
     sent: str = "not_sent"
     raw_output: str = ""
@@ -132,7 +133,44 @@ class JobManager:
         except (KeyError, TypeError, ValueError) as error:
             raise JobError(f"Invalid arguments for {command_id}: {error}") from error
 
+        return await self._submit(spec, values, runtime_id=runtime_id, request_id=request_id,
+                                  run_id=run_id, timeout=timeout)
+
+    async def submit_operation(
+        self, *, kind: str, inputs: dict[str, Any],
+        operation: Callable[[float], Awaitable[dict[str, Any]]],
+        runtime_id: str, request_id: str | None = None,
+        run_id: str | None = None, timeout: float = 120,
+        mutating: bool = True,
+    ) -> Job:
+        """Trusted internal operations share the command queue, IDs and deadlines.
+
+        The callable receives the remaining total deadline after queueing. It is
+        never serialized or accepted from an MCP caller. There are no nested jobs.
+        """
+        if self._closed:
+            raise JobError("Job manager is closed.")
+        if not isinstance(kind, str) or not kind.strip() or not callable(operation):
+            raise JobError("An operation requires a kind and callable.")
+        if not isinstance(inputs, dict) or not isinstance(runtime_id, str) or not runtime_id.strip():
+            raise JobError("Operation inputs/runtime_id are invalid.")
+        if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 300:
+            raise JobError("timeout must be greater than 0 and at most 300 seconds.")
+        if request_id is not None and (not isinstance(request_id, str) or not request_id.strip()):
+            raise JobError("request_id must not be empty.")
+        spec = CommandSpec(kind, mutating=mutating)
+        return await self._submit(spec, inputs, runtime_id=runtime_id, request_id=request_id,
+                                  run_id=run_id, timeout=timeout, operation=operation)
+
+    async def _submit(self, spec, values, *, runtime_id, request_id, run_id, timeout, operation=None):
+        # Snapshot nested inputs before queueing; caller edits cannot change a job
+        # after its duplicate-request fingerprint has been computed.
+        try:
+            values = json.loads(json.dumps(values, allow_nan=False))
+        except (TypeError, ValueError) as error:
+            raise JobError("Job inputs must be JSON values.") from error
         request = request_id or str(uuid.uuid4())
+        command_id = spec.command_id
         fingerprint = hashlib.sha256(
             json.dumps(
                 [runtime_id, command_id, values, timeout, run_id],
@@ -153,7 +191,7 @@ class JobManager:
                     1
                     for item in self._jobs.values()
                     if item.runtime_id == runtime_id
-                    and self._commands[item.command_id].mutating
+                    and item.mutating
                     and item.status in {"queued", "running"}
                 )
                 if pending >= self._max_mutating_jobs_per_runtime:
@@ -169,10 +207,11 @@ class JobManager:
                 arguments=values,
                 timeout=timeout,
                 fingerprint=fingerprint,
+                mutating=spec.mutating,
             )
             self._jobs[job.job_id] = job
             self._requests[request] = (job.job_id, fingerprint)
-            task = asyncio.create_task(self._run(job, spec))
+            task = asyncio.create_task(self._run(job, spec, operation))
             self._tasks[job.job_id] = task
             task.add_done_callback(lambda finished, key=job.job_id: self._tasks.pop(key, None))
             return job
@@ -198,22 +237,30 @@ class JobManager:
 
     async def close(self) -> None:
         self._closed = True
-        tasks = list(self._tasks.values())
-        for task in tasks:
+        entries = list(self._tasks.items())
+        tasks = [task for _, task in entries]
+        for job_id, task in entries:
+            job = self._jobs[job_id]
+            # A task cancelled before its coroutine starts cannot run _run's
+            # cancellation handler. Record that definite non-execution here.
+            if job.status == "queued":
+                job.status = "cancelled"
+                job.finished_at = time.time()
+                job.errors.append("Job cancelled before execution during shutdown.")
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
 
-    async def _run(self, job: Job, spec: CommandSpec) -> None:
+    async def _run(self, job: Job, spec: CommandSpec, operation=None) -> None:
         lock = self._runtime_locks.setdefault(job.runtime_id, asyncio.Lock())
         try:
             async with asyncio.timeout(job.created_monotonic + job.timeout - time.monotonic()):
                 if spec.mutating:
                     async with lock:
-                        await self._execute_job(job, spec)
+                        await self._execute_job(job, spec, operation)
                 else:
-                    await self._execute_job(job, spec)
+                    await self._execute_job(job, spec, operation)
         except TimeoutError:
             job.status = "failed" if job.sent == "not_sent" else "unknown"
             job.errors.append("Job deadline expired; command was not sent." if job.sent == "not_sent"
@@ -229,7 +276,7 @@ class JobManager:
         finally:
             self._tasks.pop(job.job_id, None)
 
-    async def _execute_job(self, job: Job, spec: CommandSpec) -> None:
+    async def _execute_job(self, job: Job, spec: CommandSpec, operation=None) -> None:
         if job.cancellation_requested:
             job.status = "cancelled"
             job.finished_at = time.time()
@@ -237,17 +284,30 @@ class JobManager:
         job.status = "running"
         job.started_at = time.time()
         try:
-            command = spec.render(job.arguments, job.run_id)
+            command = None if operation is not None else spec.render(job.arguments, job.run_id)
             remaining = job.created_monotonic + job.timeout - time.monotonic()
             if remaining <= 0:
                 job.status = "failed"
                 job.errors.append("Job deadline expired before transmission.")
                 return
             job.sent = "unknown"  # The callback cannot prove the exact socket-send instant.
-            output = await self._execute(command, remaining)
-            job.sent = "confirmed"
-            job.raw_output = output
-            job.parsed_output = _parse_command_result(job.command_id, output, job.arguments, job.run_id)
+            if operation is not None:
+                parsed = await operation(remaining)
+                if not isinstance(parsed, dict) or type(parsed.get("ok")) is not bool:
+                    raise ValueError("Operation must return an explicit ok result.")
+                raw_output = parsed.get("raw_output", json.dumps(parsed, ensure_ascii=False, allow_nan=False))
+                if not isinstance(raw_output, str):
+                    raise ValueError("Operation raw_output must be text.")
+                job.raw_output = raw_output
+                job.parsed_output = {**parsed, "status": (
+                    "unknown" if parsed.get("execution_unknown") else
+                    "succeeded" if parsed["ok"] else "failed")}
+                job.sent = "unknown" if parsed.get("execution_unknown") else "confirmed"
+            else:
+                output = await self._execute(command, remaining)
+                job.sent = "confirmed"
+                job.raw_output = output
+                job.parsed_output = _parse_command_result(job.command_id, output, job.arguments, job.run_id)
             job.status = "unknown" if job.cancellation_requested else job.parsed_output.get("status", "succeeded")
             if job.cancellation_requested:
                 job.errors.append("Cancellation requested after transmission; execution is unknown.")
@@ -255,7 +315,7 @@ class JobManager:
             job.sent = "unknown" if job.started_at else "not_sent"
             job.status = "unknown"
             job.errors.append(str(error))
-        except (ConnectionError, OSError, RuntimeError, UnicodeError, ValueError) as error:
+        except (ConnectionError, OSError, RuntimeError, UnicodeError, ValueError, TypeError) as error:
             job.status = "unknown" if job.sent != "not_sent" else "failed"
             job.errors.append(str(error))
         finally:

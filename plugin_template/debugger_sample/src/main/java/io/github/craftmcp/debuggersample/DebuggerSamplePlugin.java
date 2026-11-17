@@ -12,6 +12,8 @@ public final class DebuggerSamplePlugin extends JavaPlugin {
     public void onEnable() {
         java.util.Objects.requireNonNull(getCommand("craftdebugrcon"))
                 .setExecutor(new RconFixtureCommand());
+        java.util.Objects.requireNonNull(getCommand("craftmcpstatus"))
+                .setExecutor(new PluginStatusCommand(this));
     }
 
     @Override

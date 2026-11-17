@@ -14,11 +14,15 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from fastmcp import Client
+from fastmcp import Client, FastMCP
 from mcp_server import server
 from mcp_server.paper_runner import read_state
 from mcp_server.services.deployment import deploy, digest, log_status, plugin_in_list
 from mcp_server.services.file_gate import FileGate
+from mcp_server.services.jobs import JobManager
+from mcp_server.services.plugin_runtime import PluginJobs
+from mcp_server.tools.plugins import register_plugin_tools
+from mcp_server.tools.debugger import register_debugger_tools
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -209,63 +213,79 @@ class DeploymentTests(Fixtures):
 
 
 class AsyncBuildTests(unittest.IsolatedAsyncioTestCase):
-    async def test_cancelled_call_finishes_worker_without_blocking_other_tools(self):
+    async def asyncSetUp(self):
+        async def unused(command, timeout):
+            raise AssertionError("Build must not send RCON")
+        self.manager = JobManager(unused, {})
+        self.app = FastMCP("build responsiveness")
+        register_plugin_tools(self.app, server.plugin_service, PluginJobs(self.manager, server.runtime_service))
+        register_debugger_tools(self.app, server.debugger_service)
+        @self.app.tool()
+        async def cancel_job(job_id: str):
+            return (await self.manager.cancel(job_id)).as_dict()
+
+    async def asyncTearDown(self):
+        await self.manager.close()
+
+    async def test_cancelled_build_job_finishes_worker_and_reports_unknown(self):
         release = threading.Event()
         started = threading.Event()
         finished = threading.Event()
 
-        def work(*args):
+        def work(*args, **kwargs):
             started.set()
             try:
                 if not release.wait(5):
                     raise AssertionError("Cancelled worker did not get its cleanup signal.")
-                return server._result(ok=True, stage="fixture")
+                return {"ok": True, "stage": "fixture"}
             finally:
                 finished.set()
 
-        with patch.object(server, "_build_locked", side_effect=work) as worker:
-            async with Client(server.mcp) as client:
-                pending = asyncio.create_task(client.call_tool("build_plugin", {"plugin_name": "QAProbe", "main_class": "local.Probe", "source_files": {"Probe.java": "class Probe {}"}}))
+        with patch.object(server.plugin_service, "build", side_effect=work) as worker:
+            async with Client(self.app) as client:
+                response = await client.call_tool("build_plugin", {"plugin_name": "QAProbe", "main_class": "local.Probe", "source_files": {"Probe.java": "class Probe {}"}})
+                job_id = response.data["job_id"]
                 try:
-                    while not started.is_set():
-                        await asyncio.sleep(0.01)
-                    pending.cancel()
-                    with self.assertRaises(asyncio.CancelledError):
-                        await pending
+                    self.assertTrue(await asyncio.to_thread(started.wait, 2))
+                    await client.call_tool("cancel_job", {"job_id": job_id})
                     await asyncio.wait_for(client.list_tools(), 2)
                 finally:
                     release.set()
                     self.assertTrue(await asyncio.to_thread(finished.wait, 3))
                 self.assertEqual(worker.call_count, 1)
+                for _ in range(100):
+                    job = await self.manager.get(job_id)
+                    if job.status == "unknown":
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertEqual(job.status, "unknown")
 
-    async def test_build_and_deploy_worker_do_not_block_debugger_calls(self):
+    async def test_build_job_does_not_block_debugger_calls(self):
         release = threading.Event()
         started = threading.Event()
 
-        def work(*args):
+        def work(*args, **kwargs):
             started.set()
             if not release.wait(5):
                 raise AssertionError("The event loop did not release the worker.")
-            return server._result(ok=True, stage="fixture")
+            return {"ok": True, "stage": "fixture"}
 
-        async with Client(server.mcp) as client:
-            for name, target, params in (
-                ("build_plugin", "_build_locked", {"plugin_name": "QAProbe", "main_class": "local.Probe", "source_files": {"Probe.java": "class Probe {}"}}),
-                ("deploy_plugin", "_deploy_plugin", {"plugin_name": "QAProbe"}),
-            ):
-                with self.subTest(name=name), patch.object(server, target, side_effect=work):
-                    started.clear()
-                    release.clear()
-                    pending = asyncio.create_task(client.call_tool(name, params))
-                    try:
-                        while not started.is_set():
-                            await asyncio.sleep(0.01)
-                        state = await asyncio.wait_for(client.call_tool("get_debug_state", {"session_id": "unknown"}), 2)
-                        self.assertEqual(state.data["error"]["code"], "session_not_found")
-                        self.assertFalse(pending.done())
-                    finally:
-                        release.set()
-                        await pending
+        async with Client(self.app) as client:
+            with patch.object(server.plugin_service, "build", side_effect=work):
+                submitted = await client.call_tool("build_plugin", {"plugin_name": "QAProbe", "main_class": "local.Probe", "source_files": {"Probe.java": "class Probe {}"}})
+                try:
+                    self.assertTrue(await asyncio.to_thread(started.wait, 2))
+                    state = await asyncio.wait_for(client.call_tool("get_debug_state", {"session_id": "unknown"}), 2)
+                    self.assertEqual(state.data["error"]["code"], "session_not_found")
+                    self.assertEqual((await self.manager.get(submitted.data["job_id"])).status, "running")
+                finally:
+                    release.set()
+                for _ in range(100):
+                    job = await self.manager.get(submitted.data["job_id"])
+                    if job.status == "succeeded":
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertEqual(job.status, "succeeded", job.errors)
 
 
 class RunnerTests(Fixtures):

@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import logging
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path, PureWindowsPath
@@ -22,9 +23,15 @@ from mcp_server.adapters.rcon import execute_rcon
 from mcp_server.services.debugger import DebuggerConfig, DebuggerService
 from mcp_server.services.deployment import deploy
 from mcp_server.services.file_gate import FileGate
-from mcp_server.services.jobs import JobError, JobManager, default_commands
+from mcp_server.services.jobs import JobError, JobManager, default_commands, _parse_command_result
+from mcp_server.models.contracts import ContractError
+from mcp_server.services.app_runtime import create_runtime, execute_endpoint, observe_plugin
+from mcp_server.services.plugin_runtime import ManagedPluginService, PluginJobs
+from mcp_server.services.runtime_jobs import RuntimeJobRouter, RuntimeJobs
 from mcp_server.services.server_log import read_server_log
 from mcp_server.tools.debugger import register_debugger_tools
+from mcp_server.tools.runtime import register_runtime_tools
+from mcp_server.tools.plugins import register_plugin_tools
 
 load_dotenv(Path(__file__).with_name(".env"))
 
@@ -45,10 +52,23 @@ async def _lifespan(server):
     try:
         yield {"debugger": debugger_service}
     finally:
-        try:
-            await debugger_service.close()
-        finally:
-            await job_manager.close()
+        if runtime_service.lifecycle is None:
+            # Preserve the existing external-server shutdown contract.
+            try:
+                await debugger_service.close()
+            finally:
+                await job_manager.close()
+        else:
+            try:
+                await job_manager.close()
+            finally:
+                try:
+                    cleanup = await runtime_service.close()
+                    if not cleanup["ok"]:
+                        logging.getLogger(__name__).error("Managed runtime cleanup incomplete: %s", cleanup)
+                        raise RuntimeError("Managed runtime cleanup did not confirm every process exit.")
+                finally:
+                    await debugger_service.close()
 
 
 mcp = FastMCP(
@@ -150,7 +170,18 @@ async def _execute_job_command(command: str, timeout: float) -> str:
         raise
 
 
-job_manager = JobManager(_execute_job_command, default_commands())
+runtime_config_name = os.environ.get("CRAFTMCP_RUNTIME_CONFIG")
+runtime_config_path = Path(runtime_config_name) if runtime_config_name else None
+if runtime_config_path is not None and not runtime_config_path.is_absolute():
+    runtime_config_path = PROJECT_ROOT / runtime_config_path
+runtime_service = create_runtime(debugger_service, workspace=PROJECT_ROOT, config_path=runtime_config_path)
+runtime_router = RuntimeJobRouter(runtime_service, _execute_job_command)
+job_manager = JobManager(runtime_router.execute, {**default_commands(), **runtime_router.commands()})
+runtime_jobs = RuntimeJobs(runtime_service, job_manager)
+plugin_service = ManagedPluginService(PROJECT_ROOT, runtime=runtime_service,
+    observe_plugin=partial(observe_plugin, runtime_service), java_executable=debugger_service.config.java_executable)
+register_runtime_tools(mcp, runtime_service, runtime_jobs)
+register_plugin_tools(mcp, plugin_service, PluginJobs(job_manager, runtime_service))
 
 
 def _find_built_jar(plugin_name: str) -> Path | None:
@@ -164,9 +195,12 @@ def _find_built_jar(plugin_name: str) -> Path | None:
 
 
 @mcp.tool()
-async def list_players() -> str:
+async def list_players(runtime_id: str | None = None) -> str:
     """테스트 Minecraft 서버의 접속자 목록을 조회합니다."""
-    return await asyncio.to_thread(_rcon_command, "list")
+    if runtime_id is None:
+        return await asyncio.to_thread(_rcon_command, "list")
+    target = runtime_service.resolve(runtime_id)
+    return await execute_endpoint(target.rcon, "list", float(os.environ.get("MC_RCON_TIMEOUT", "5")))
 
 
 @mcp.tool()
@@ -180,20 +214,33 @@ async def execute_command(
 ) -> str:
     """허용된 명령을 비동기 job으로 시작하고 job 상태를 반환합니다."""
     try:
-        # Until A's registry is connected this app controls exactly one configured RCON target.
-        selected_runtime = os.environ.get("MC_RUNTIME_ID", "default")
-        if runtime_id != selected_runtime:
-            raise JobError(f"Unknown runtime_id: {runtime_id}; configured target is {selected_runtime}.")
-        job = await job_manager.submit(
-            command_id=command_id,
-            arguments=arguments,
-            runtime_id=runtime_id,
-            request_id=request_id,
-            run_id=run_id,
-            timeout=timeout_seconds,
-        )
+        # Private lifecycle commands and internal plugin operations cannot be
+        # reached through this generic command allowlist.
+        spec = default_commands().get(command_id)
+        if spec is None:
+            raise JobError(f"Unsupported command_id: {command_id}")
+        try:
+            target = runtime_service.resolve(runtime_id)
+        except ContractError:
+            raise JobError(f"Unknown runtime_id: {runtime_id}") from None
+        if target.rcon is None:
+            raise JobError("RCON is not explicitly bound to this runtime.")
+        if arguments is not None and not isinstance(arguments, dict):
+            raise JobError("arguments must be an object.")
+        values = json.loads(json.dumps(arguments or {}, allow_nan=False))
+        command = spec.render(values, run_id)
+
+        async def operation(remaining):
+            raw = await execute_endpoint(target.rcon, command, remaining)
+            parsed = _parse_command_result(command_id, raw, values, run_id)
+            status = parsed.get("status", "succeeded")
+            return {**parsed, "ok": status == "succeeded", "execution_unknown": status == "unknown", "raw_output": raw}
+
+        job = await job_manager.submit_operation(kind=command_id, inputs=values, operation=operation,
+            runtime_id=runtime_id, request_id=request_id, run_id=run_id,
+            timeout=timeout_seconds, mutating=spec.mutating)
         return _result(ok=True, stage="execute_command", **job.as_dict())
-    except JobError as error:
+    except (JobError, ValueError, TypeError, KeyError) as error:
         return _result(ok=False, stage="execute_command", errors=[str(error)])
 
 
@@ -220,12 +267,18 @@ async def cancel_job(job_id: str) -> str:
 
 
 @mcp.tool()
-def get_server_log(start_offset: int = 0, max_lines: int = 100, cursor: str | None = None) -> str:
+def get_server_log(start_offset: int = 0, max_lines: int = 100, cursor: str | None = None,
+                   runtime_id: str | None = None) -> str:
     """완성된 로그 줄을 읽습니다. 이어 읽을 때 이전 next_cursor를 cursor에 전달하세요.
 
     파일 교체·내용 변경은 reset=true와 함께 처음부터 반환합니다.
     """
     server_dir = os.environ.get("MC_SERVER_DIR")
+    if runtime_id is not None:
+        try:
+            server_dir = str(runtime_service.resolve(runtime_id).server_dir)
+        except ContractError as error:
+            return _result(ok=False, stage="get_server_log", errors=[error.code])
     if not server_dir:
         return _result(
             ok=False,
@@ -409,9 +462,8 @@ def _build_locked(plugin_name: str, main_class: str, source_files: dict[str, str
         return _plugin_error(str(error))
 
 
-@mcp.tool()
 async def build_plugin(plugin_name: str, main_class: str, source_files: dict[str, str]) -> str:
-    """Build validated Java sources without blocking debugger calls."""
+    """Legacy Python entry point; the MCP name is registered by C's tools."""
     return await anyio.to_thread.run_sync(_build_locked, plugin_name, main_class, source_files)
 
 
@@ -447,9 +499,8 @@ def _deploy_plugin(plugin_name: str, prepare_stop=lambda: None) -> str:
                        files_modified=False, backup_path=None, execution_unknown=False)
 
 
-@mcp.tool()
 async def deploy_plugin(plugin_name: str) -> str:
-    """Deploy to paper_runner: stop, observe exit, install, restart, verify exact plugin."""
+    """Legacy Python entry point; MCP deployment uses exact build IDs through A."""
     loop = asyncio.get_running_loop()
 
     def prepare_stop():

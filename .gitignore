@@ -236,6 +236,7 @@ node_modules/
 
 # Local debugger configuration and collected values
 /debugger.local*.json
+/runtime.local*.json
 /data/debugger/
 
 # Managed Paper process state, installation journals, backups and console logs
