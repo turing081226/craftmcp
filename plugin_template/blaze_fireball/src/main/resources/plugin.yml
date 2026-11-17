@@ -1,0 +1,9 @@
+name: BlazeFireball
+version: '${version}'
+main: local.craftmcp.blazefireball.BlazeFireballPlugin
+api-version: '1.20'
+description: Right-click with a blaze rod to cast a cinematic fireball
+permissions:
+  blazefireball.use:
+    description: Cast a fireball by right-clicking with a blaze rod
+    default: true
