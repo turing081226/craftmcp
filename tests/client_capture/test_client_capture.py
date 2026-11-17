@@ -269,6 +269,49 @@ class NativeWindowsTests(unittest.TestCase):
                     backend._ready(client)
                 self.assertEqual(error.exception.code, "client_not_visible")
 
+    def test_passive_overlays_warn_but_real_windows_still_block(self):
+        from mcp_server.adapters import client_capture as module
+        self.assertTrue(module.is_passive_overlay(0x8 | 0x20 | 0x80000))  # Medal-style click-through
+        self.assertTrue(module.is_passive_overlay(0x8 | 0x80 | 0x80000))  # topmost layered tool HUD
+        self.assertFalse(module.is_passive_overlay(0x80 | 0x80000))  # layered popup (e.g. AV notice)
+        self.assertFalse(module.is_passive_overlay(0x8 | 0x20))  # not layered
+        self.assertFalse(module.is_passive_overlay(0))
+
+        backend = WindowsClientCapture()
+        client = ClientWindow(101, 1, 1, "test", "GLFW30", "java.exe")
+
+        def rect_of(_hwnd, pointer):
+            rect = pointer._obj
+            rect.left, rect.top, rect.right, rect.bottom = 0, 0, 800, 600
+            return True
+
+        def point_of(_hwnd, pointer):
+            pointer._obj.x, pointer._obj.y = 0, 0
+            return True
+
+        styles = {}
+        metrics = {76: 0, 77: 0, 78: 1920, 79: 1080}
+        with patch.object(backend, "_inspect", return_value=client), \
+                patch.object(backend, "_cloaked", return_value=False), \
+                patch.object(backend, "_windows", return_value=[303, 101]), \
+                patch.object(backend, "_window_title", return_value="Overlay"), \
+                patch.object(backend.user, "IsWindowVisible", return_value=True), \
+                patch.object(backend.user, "IsIconic", return_value=False), \
+                patch.object(backend.user, "GetForegroundWindow", return_value=101), \
+                patch.object(backend.user, "GetClientRect", side_effect=rect_of), \
+                patch.object(backend.user, "ClientToScreen", side_effect=point_of), \
+                patch.object(backend.user, "GetWindowRect", side_effect=rect_of), \
+                patch.object(backend.user, "GetSystemMetrics", side_effect=metrics.get), \
+                patch.object(backend.user, "GetWindowLongPtrW", side_effect=lambda h, i: styles[h]):
+            styles[303] = 0x8 | 0x20 | 0x80000
+            overlays = []
+            self.assertEqual(backend._ready(client, overlays), (0, 0, 800, 600))
+            self.assertEqual(overlays, ["Overlay"])
+            styles[303] = 0
+            with self.assertRaises(CaptureError) as error:
+                backend._ready(client, [])
+            self.assertEqual(error.exception.code, "client_occluded")
+
     def test_reused_handle_or_pid_identity_is_rejected(self):
         backend = WindowsClientCapture()
         old = ClientWindow(101, 1, 1, "test", "GLFW30", "java.exe")

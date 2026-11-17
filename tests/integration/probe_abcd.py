@@ -110,7 +110,7 @@ async def run(args):
             assert final["status"] == expected, final
             return final
         names = {tool.name for tool in await client.list_tools()}
-        assert len(names) == 26, names
+        assert len(names) == 29, names
         assert {"list_game_clients", "capture_game_view", "get_game_capture",
                 "record_visual_assertion", "get_visual_run_evidence"} <= names, names
         summary["tools"] = sorted(names)

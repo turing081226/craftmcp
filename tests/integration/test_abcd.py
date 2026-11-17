@@ -123,7 +123,7 @@ class ABCDTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_shared_app_has_all_tools_and_generic_command_cannot_call_lifecycle(self):
         names = set(await server.mcp.get_tools())
-        self.assertEqual(len(names), 26)
+        self.assertEqual(len(names), 29)
         self.assertTrue({"start_server", "stop_server", "rollback_plugin", "get_plugin_status",
                          "list_game_clients", "capture_game_view", "get_game_capture",
                          "record_visual_assertion", "get_visual_run_evidence"} <= names)
