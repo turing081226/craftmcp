@@ -23,6 +23,8 @@ from mcp_server.services.deployment import deploy
 from mcp_server.services.file_gate import FileGate
 from mcp_server.services.server_log import read_server_log
 from mcp_server.tools.debugger import register_debugger_tools
+from mcp_server.services.client_capture import ClientCaptureService
+from mcp_server.tools.client_capture import register_client_capture_tools
 
 load_dotenv(Path(__file__).with_name(".env"))
 
@@ -52,6 +54,8 @@ mcp = FastMCP(
     strict_input_validation=True,
 )
 register_debugger_tools(mcp, debugger_service)
+client_capture_service = ClientCaptureService(PROJECT_ROOT)
+register_client_capture_tools(mcp, client_capture_service)
 MAX_LOG_LINES = 1000
 PLUGIN_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 JAVA_CLASS_PATTERN = re.compile(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$")
