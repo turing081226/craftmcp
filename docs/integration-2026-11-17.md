@@ -2,7 +2,7 @@
 
 ## 변경 범위
 
-main `887318c`의 B/D, A `782d086`, C `7f79bfd`를
+main `887318c`의 B/D, A `782d086`, C `b68896d`(제품 코드 `7f79bfd`)를
 `codex/integrate-abcd-20261117`에서 연결했다. 파일 병합에 더해 다음 실행 경계를 구현했다.
 
 - 공용 앱에 도구 21개를 한 번씩 등록한다. runtime 4개와 C의 build/deploy/status/rollback을 연결한다.
@@ -132,3 +132,5 @@ Windows 교체가 실패한 `ab-d06fc627`은 성공 증거로 재사용하지 �
 lease/detach 결과는 별도 [D 검증 기록](d-rcon-debugger-validation.md)에 있다.
 새 21개 도구의 Codex 연결 재발견은 MCP 재연결 후 별도 확인한다.
 실제 플레이어/GUI, 범용 game-state/reset/evidence 도구, 영속 job 복구는 이 통합 범위가 아니다.
+최종 원격 확인에서 추가로 발견한 C `b68896d`는 인계 문서만 추가한 커밋이며 제품 코드 차이는 없다.
+해당 문서와 커밋 이력도 포함했다. Paper API SNAPSHOT과 전이 의존성 전체의 바이트 고정은 C의 후속 범위다.
