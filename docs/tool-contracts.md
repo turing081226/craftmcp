@@ -2,6 +2,8 @@
 
 작성: 2026-11-10 (KST). [분업안](team-work-split-2026-11-03.md) §3에 따른 **검토용 초안**이다. 팀 합의를 완료했다고 간주하지 않는다. 구현은 `mcp_server/models/contracts.py`이며 서비스 구현을 import하지 않는다. 기존 debugger JSON Lines 프로토콜과 기존 도구 응답 형식은 유지한다.
 
+2026-11-17 보완: 최신 main `887318c`와 C 브랜치의 API 차이·공용 앱 종료 순서 조정은 [A 통합 인계 기록](a-runtime-handoff-2026-11-17.md)을 함께 확인한다.
+
 ## runtime
 
 `RuntimeTarget`은 하나의 서버를 가리키는 불변 등록 정보다. 같은 ID나 같은 서버 폴더의 다른 ID를 중복 등록하면 거절한다. `resolve`는 RCON/JDWP에 접속하지 않는다.
@@ -139,7 +141,7 @@ async with runtime.exclusive(runtime_id) as operation:
 
 ## B의 JobManager와 공용 앱 연결 지점
 
-main의 `0e9f89f` JobManager는 `submit(command_id=..., arguments=...)`와 실행 콜백을 받는다. 일반 operation 콜백 API는 아직 없으므로 A는 기존 CommandSpec/Job 모델과 단일 manager를 재사용하는 router를 제공한다. B 소유 파일은 수정하지 않았다.
+최신 main `887318c`의 JobManager는 `submit(command_id=..., arguments=...)`와 실행 콜백을 받는다. D의 `CommandSpec.render(arguments, run_id)`, fixture parser와 queue 포함 총 기한을 반영한 구현이다. 일반 operation 콜백 API는 아직 없으므로 A는 기존 CommandSpec/Job 모델과 단일 manager를 재사용하는 router를 제공한다. B 소유 파일은 수정하지 않았다.
 
 ```python
 from mcp_server.services.jobs import JobManager, default_commands
@@ -156,9 +158,9 @@ register_runtime_tools(mcp, runtime, runtime_jobs)  # 조회 2개 + start_server
 
 router의 제어 메시지는 RCON에 전달하지 않는다. **일반 execute_command 도구는 기존 command_specs의 ID만 허용하고**, start_server/stop_server는 A 도구로만 제출한다. 제어 메시지에 넣는 runtime_id와 manager.submit의 runtime_id는 RuntimeJobs가 동일하게 고정한다. 이 경계를 우회해 두 ID가 다른 job을 직접 만들지 않는다.
 
-B의 현재 manager는 lifecycle 완료 JSON을 일반 텍스트로 보존한다. 기존 sent/execution_status 필드는 lifecycle job에서 RCON 송신 상태를 뜻하지 않는다. 성공은 raw_output의 준비/종료 관찰과 함께 해석한다. 실행 기한 초과는 unknown으로 반환한다. queue 대기 시간의 총 기한·실행 중 cancel의 적극 정리·영속 journal은 B의 현재 구현 범위를 따르며 이 어댑터가 추가하지 않는다.
+B의 현재 manager는 lifecycle 완료 JSON을 일반 텍스트로 보존한다. 기존 sent/execution_status 필드는 lifecycle job에서 RCON 송신 상태를 뜻하지 않는다. 성공은 raw_output의 준비/종료 관찰과 함께 해석한다. 실행 기한 초과는 unknown으로 반환한다. queue 대기도 총 기한에 포함하며, 전송 전 만료는 failed/not_sent다. run_id가 다르면 같은 request_id 재사용을 거절한다. 영속 journal·프로세스 재시작 후 job 복구는 아직 제공하지 않는다.
 
-D의 lifespan 종료 순서는 다음과 같다. close 결과가 false면 아직 종료가 확인되지 않은 runtime을 사용자에게 보고한다.
+A 관리 runtime을 연결할 때 사용할 lifespan 종료 순서는 다음과 같다. 현재 main의 debugger→jobs 순서와는 다르므로 D가 관리 경로와 기존 명령 경로를 함께 검증해야 한다. 예외가 있어도 나머지 정리가 실행되도록 try/finally를 구성하고, close 결과가 false면 아직 종료가 확인되지 않은 runtime을 사용자에게 보고한다.
 
 ```python
 await job_manager.close()          # 실행 중 작업 취소·queue 정리

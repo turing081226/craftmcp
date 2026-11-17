@@ -12,6 +12,7 @@ from pathlib import Path
 from fastmcp import Client, FastMCP
 
 from mcp_server.models.contracts import ContractError, RuntimeTarget
+from mcp_server.services.debugger_fixture import COMMAND_ID
 from mcp_server.services.jobs import JobManager, default_commands
 from mcp_server.services.runtime import RuntimeRegistry, RuntimeService
 from mcp_server.services.runtime_jobs import RuntimeJobRouter, RuntimeJobs
@@ -37,6 +38,7 @@ class RuntimeJobTests(unittest.IsolatedAsyncioTestCase):
             return "There are 0 of a max of 20 players online"
 
         router = RuntimeJobRouter(self.runtime, execute)
+        self.router = router
         self.manager = JobManager(router.execute, {**default_commands(), **router.commands()})
         self.jobs = RuntimeJobs(self.runtime, self.manager)
 
@@ -87,6 +89,76 @@ class RuntimeJobTests(unittest.IsolatedAsyncioTestCase):
         stopped = await self.wait_job(stop["job_id"])
         self.assertEqual(stopped.status, "succeeded", stopped.errors)
         self.assertEqual(len(self.manager._jobs), 2)
+
+    async def test_d_fixture_parser_and_lifecycle_use_the_same_manager(self):
+        calls = []
+
+        async def fixture(command, timeout):
+            calls.append(command)
+            return ("CRAFTDEBUG_RCON v=1 status=started run_id=shared-run base=7 bonus=3\n"
+                    "CRAFTDEBUG_RCON v=1 status=ok run_id=shared-run base=7 bonus=3 damage=10 end=1\n")
+
+        self.router.execute_command = fixture
+        start = await self.jobs.submit("start_server", "paper", request_id="shared-start", timeout_seconds=5)
+        self.assertEqual((await self.wait_job(start["job_id"])).status, "succeeded")
+        command = await self.manager.submit(command_id=COMMAND_ID, arguments={"base": 7, "bonus": 3},
+                                            runtime_id="paper", run_id="shared-run", request_id="shared-fixture")
+        completed = await self.wait_job(command.job_id)
+        self.assertEqual(completed.status, "succeeded", completed.errors)
+        self.assertEqual(completed.parsed_output["result"]["damage"], 10)
+        self.assertEqual(completed.parsed_output["run_id"], "shared-run")
+        self.assertEqual(calls, ["craftdebugrcon calculate shared-run 7 3"])
+
+    async def test_lifecycle_queue_deadline_expires_without_sending_stop(self):
+        launch = self.lifecycle.launches["paper"]
+        self.lifecycle.launches["paper"] = LaunchSpec(launch.command, r"NEVER_EMITTED")
+        first = await self.jobs.submit("start_server", "paper", request_id="blocked-start", timeout_seconds=5)
+        deadline = time.monotonic() + 5
+        while "paper" not in self.lifecycle._children:
+            self.assertLess(time.monotonic(), deadline)
+            await asyncio.sleep(0.01)
+        queued = await self.jobs.submit("stop_server", "paper", request_id="expired-stop", timeout_seconds=0.15)
+        expired = await self.wait_job(queued["job_id"])
+        self.assertEqual(expired.status, "failed")
+        self.assertEqual(expired.sent, "not_sent")
+        self.assertIsNone(expired.started_at)
+        self.assertFalse(self.lifecycle._children["paper"].stop_sent)
+        duplicate = await self.jobs.submit("stop_server", "paper", request_id="expired-stop", timeout_seconds=0.15)
+        self.assertEqual(duplicate["job_id"], expired.job_id)
+        self.assertEqual((await self.manager.get(first["job_id"])).status, "running")
+        await self.manager.close()
+        self.assertEqual((await self.manager.get(first["job_id"])).status, "unknown")
+        self.assertEqual(self.commands, [])
+
+    async def test_cancelled_stop_keeps_debugger_available_for_runtime_cleanup(self):
+        start = await self.jobs.submit("start_server", "paper", request_id="cleanup-start", timeout_seconds=5)
+        self.assertEqual((await self.wait_job(start["job_id"])).status, "succeeded")
+        entered, cancelled = asyncio.Event(), asyncio.Event()
+
+        async def blocked_release(runtime_id):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        self.lifecycle.release_runtime = blocked_release
+        stop = await self.jobs.submit("stop_server", "paper", request_id="cleanup-stop", timeout_seconds=5)
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(self.manager.close(), 2)
+        self.assertTrue(cancelled.is_set())
+        self.assertEqual((await self.manager.get(stop["job_id"])).status, "unknown")
+        self.assertFalse(self.lifecycle._children["paper"].stop_sent)
+        released = []
+
+        async def release(runtime_id):
+            released.append(runtime_id)
+
+        self.lifecycle.release_runtime = release
+        cleanup = await self.runtime.close(timeout_seconds=5)
+        self.assertTrue(cleanup["ok"], cleanup)
+        self.assertEqual(released, ["paper"])
+        self.assertIsNotNone(self.lifecycle._children["paper"].process.returncode)
 
     async def test_cancel_queued_operation_never_sends_stop(self):
         launch = self.lifecycle.launches["paper"]
