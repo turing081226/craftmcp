@@ -9,6 +9,12 @@ public final class DebuggerSamplePlugin extends JavaPlugin {
     private final DamageCalculator calculator = new DamageCalculator();
 
     @Override
+    public void onEnable() {
+        java.util.Objects.requireNonNull(getCommand("craftdebugrcon"))
+                .setExecutor(new RconFixtureCommand());
+    }
+
+    @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof ConsoleCommandSender)) {
             sender.sendMessage("CRAFTDEBUG status=error code=LOCAL_CONSOLE_REQUIRED");

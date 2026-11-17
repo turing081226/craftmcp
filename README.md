@@ -10,6 +10,10 @@
 
 [4인 병렬 개발 분업안](docs/team-work-split-2026-11-03.md)에서 A·B·C·D별 담당 도구·파일, 공통 계약, 독립 개발 방법과 통합 완료 기준을 확인할 수 있습니다.
 
+[D → B RCON·디버거 통합 계약](docs/d-rcon-debugger-contract.md)에 실행할 fixture 명령,
+출력 파서, 중단점·기대 변수, ID 연결 및 실제 Paper 검증 절차를 정리했습니다.
+[검증 기록](docs/d-rcon-debugger-validation.md)에서 B의 실제 job·공용 MCP 앱을 사용한 Paper 통합 결과를 확인할 수 있습니다.
+
 ## 각 파일의 역할
 
 | 파일 및 디렉터리                             | 역할                | 비고                |
@@ -34,7 +38,7 @@
 다음처럼 실행합니다.
 
 ```powershell
-.\mcp_server\.venv\Scripts\python.exe -m mcp_server.server
+.\.venv\Scripts\python.exe -m mcp_server.server
 ```
 
 JVM 디버거를 사용하려면 먼저 Java 헬퍼를 빌드합니다.

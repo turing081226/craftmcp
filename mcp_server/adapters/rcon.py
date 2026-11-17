@@ -5,6 +5,7 @@ import math
 import socket
 import struct
 import time
+from threading import Event
 
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
@@ -16,11 +17,13 @@ def execute_rcon(
     host: str = "127.0.0.1",
     port: int = 25575,
     timeout: float = 5,
+    cancel_event: Event | None = None,
 ) -> str:
     """Connect, authenticate, execute once, and close even on timeout/auth/EOF errors.
 
     The deadline covers connect, authentication, and all response reads together.
     Commands are never retried: a lost response does not imply non-execution.
+    cancel_event interrupts response waits so a cancelled job can close its socket.
     """
     if not math.isfinite(timeout) or not 0 < timeout <= 300:
         raise ValueError("RCON timeout must be greater than 0 and at most 300 seconds.")
@@ -31,6 +34,8 @@ def execute_rcon(
     deadline = time.monotonic() + timeout
 
     def remaining() -> float:
+        if cancel_event is not None and cancel_event.is_set():
+            raise ConnectionAbortedError("RCON wait cancelled; execution may be unknown.")
         value = deadline - time.monotonic()
         if value <= 0:
             raise TimeoutError("RCON operation timed out; execution may be unknown.")
@@ -41,8 +46,13 @@ def execute_rcon(
         def read_exact(length: int) -> bytes:
             result = bytearray()
             while len(result) < length:
-                connection.settimeout(remaining())
-                chunk = connection.recv(length - len(result))
+                connection.settimeout(min(remaining(), 0.1) if cancel_event is not None else remaining())
+                try:
+                    chunk = connection.recv(length - len(result))
+                except socket.timeout:
+                    if cancel_event is None:
+                        raise
+                    continue
                 if not chunk:
                     raise ConnectionError("RCON connection closed before a complete response.")
                 result.extend(chunk)
