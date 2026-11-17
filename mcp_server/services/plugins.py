@@ -70,11 +70,14 @@ def _replace_file(source: Path, target: Path, *, timeout: float = 2):
     Indexers/scanners can briefly deny rename after a reader has closed a JAR.
     This retries only the local rename, never lifecycle/command operations.
     """
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    deadline = started + timeout
+    attempts = 0
     while True:
         try:
+            attempts += 1
             os.replace(source, target)
-            return
+            return {"attempts": attempts, "wait_seconds": time.monotonic() - started}
         except OSError as error:
             if (os.name != "nt" or getattr(error, "winerror", None) not in (5, 32, 33)
                     or time.monotonic() >= deadline):
@@ -189,7 +192,8 @@ def _jar_manifest(path: Path) -> dict:
 class PluginService:
     def __init__(self, workspace: Path, *, runtime: RuntimeService | None = None,
                  release_runtime: Callable[[str], None] | None = None,
-                 observe_plugin: Callable[[str, str], dict] | None = None):
+                 observe_plugin: Callable[[str, str], dict] | None = None,
+                 java_executable: str = "java"):
         self.workspace = workspace.resolve()
         self.template = self.workspace / "plugin_template"
         # Existing .gitignore excludes .cache; local JARs and records stay private.
@@ -197,6 +201,9 @@ class PluginService:
         self.runtime = runtime
         self.release_runtime = release_runtime
         self.observe_plugin = observe_plugin
+        self.java_executable = java_executable
+        java_path = Path(java_executable)
+        self.javap_executable = str(java_path.with_name("javap.exe" if os.name == "nt" else "javap")) if java_path.is_absolute() else "javap"
 
     def _directory(self, kind: str, identifier: str) -> Path:
         if not ID.fullmatch(identifier):
@@ -276,7 +283,7 @@ class PluginService:
                 (project / "src/main/resources").mkdir(parents=True, exist_ok=True)
                 (project / "src/main/resources/plugin.yml").write_text(manifest_text, encoding="utf-8")
                 cache = _inside(self.workspace, self.workspace / ".cache/gradle")
-                command = ["java", "-cp", str(project / "gradle/wrapper/gradle-wrapper.jar"),
+                command = [self.java_executable, "-cp", str(project / "gradle/wrapper/gradle-wrapper.jar"),
                            "org.gradle.wrapper.GradleWrapperMain", "--gradle-user-home", str(cache),
                            "--no-daemon", "--console=plain", "clean", "build"]
                 if offline:
@@ -330,7 +337,7 @@ class PluginService:
             raise ValueError("Main class is missing from the JAR.")
         inspected = {}
         for name in classes:
-            output = _run(["javap", "-p", "-l", "-verbose", "-classpath", str(jar), name],
+            output = _run([self.javap_executable, "-p", "-l", "-verbose", "-classpath", str(jar), name],
                           cwd=jar.parent, timeout=30)
             if output.returncode or "major version: 61" not in output.stdout:
                 raise ValueError(f"Cannot verify Java 17 bytecode for {name}.")

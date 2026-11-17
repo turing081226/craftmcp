@@ -28,10 +28,13 @@ class SharedStdioCaptureTests(unittest.IsolatedAsyncioTestCase):
                 tools = await client.list_tools()
                 names = [tool.name for tool in tools]
                 self.assertEqual(len(names), len(set(names)))
+                self.assertEqual(len(names), 26)
                 self.assertTrue({"list_game_clients", "capture_game_view", "get_game_capture",
                                  "record_visual_assertion", "get_visual_run_evidence",
                                  "list_players", "get_server_log", "build_plugin", "deploy_plugin",
-                                 "attach_debugger", "detach_debugger"} <= set(names))
+                                 "attach_debugger", "detach_debugger", "list_runtimes", "get_runtime_status",
+                                 "start_server", "stop_server", "get_plugin_status", "rollback_plugin",
+                                 "execute_command", "get_job", "cancel_job"} <= set(names))
                 listed = await client.call_tool("list_game_clients", {})
                 if os.name == "nt":
                     self.assertTrue(listed.structured_content["ok"], listed.structured_content)

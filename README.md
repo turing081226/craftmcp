@@ -6,9 +6,21 @@
 
 ## 남은 구현·검증 계획
 
+[2026-11-17 A·B·C·D 통합 결과](docs/integration-2026-11-17.md)에 공용 도구 21개,
+runtime 설정, build_id 기반 배포·롤백 및 실제 Paper 인수 시험을 정리했습니다.
+기존 분업 문서의 연결 예정 상태보다 이 통합 기록을 우선 확인하세요.
+
+최신 main과 C의 화면 캡처 기능을 합친 공용 앱은 **26개 도구**를 제공합니다.
+[C/main 통합 기록](docs/c-main-integration-2026-11-17.md)과
+[Minecraft 화면 캡처 사용법](docs/client-capture.md)에서 통합 범위와 검증 방법을 확인할 수 있습니다.
+
 [2026-11-03 후속 계획](docs/remaining-plan-2026-11-03.md)에 현재 구현, 추가 MCP 도구의 입력·결과 계약, 빌드·배포 보완, 실제 통합 검증 순서를 정리했습니다. 시험용 플러그인 종류는 미정입니다.
 
 [4인 병렬 개발 분업안](docs/team-work-split-2026-11-03.md)에서 A·B·C·D별 담당 도구·파일, 공통 계약, 독립 개발 방법과 통합 완료 기준을 확인할 수 있습니다.
+
+[D → B RCON·디버거 통합 계약](docs/d-rcon-debugger-contract.md)에 실행할 fixture 명령,
+출력 파서, 중단점·기대 변수, ID 연결 및 실제 Paper 검증 절차를 정리했습니다.
+[검증 기록](docs/d-rcon-debugger-validation.md)에서 B의 실제 job·공용 MCP 앱을 사용한 Paper 통합 결과를 확인할 수 있습니다.
 
 ## 각 파일의 역할
 
@@ -29,12 +41,12 @@
 
 ## MCP 서버와 JVM 디버거 실행
 
-공용 MCP 서버는 RCON·플러그인 도구와 JVM 디버거 도구를 함께 등록합니다. 먼저
+공용 MCP 서버는 runtime·job·RCON·플러그인·JVM 디버거·화면 캡처 도구를 함께 등록합니다. 먼저
 `mcp_server/.env`에 `MC_SERVER_DIR`과 `MC_RCON_PASSWORD`를 설정한 뒤 저장소 루트에서
 다음처럼 실행합니다.
 
 ```powershell
-.\mcp_server\.venv\Scripts\python.exe -m mcp_server.server
+.\.venv\Scripts\python.exe -m mcp_server.server
 ```
 
 JVM 디버거를 사용하려면 먼저 Java 헬퍼를 빌드합니다.

@@ -324,6 +324,39 @@ class DebuggerService:
                 if error.code not in {"session_not_found", "vm_disconnected", "vm_terminated"}:
                     raise
 
+    async def runtime_state(self, runtime_id: str) -> dict | None:
+        """Observe an existing session without opening a JDWP connection."""
+        if self._client is None or self._closed:
+            return None
+        for sid, (rid, _) in reversed(list(self._sessions.items())):
+            if rid != runtime_id:
+                continue
+            try:
+                return await self.call("get_debug_state", {"session_id": sid})
+            except DebuggerError as error:
+                if error.code not in {"session_not_found", "vm_disconnected", "vm_terminated"}:
+                    raise
+        return None
+
+    async def release_runtime(self, runtime_id: str) -> None:
+        """Fail closed on unknown attach completion; release only this target."""
+        async with self._lifecycle_lock:
+            if any(context.get("runtime_id") == runtime_id for context in self._attach_requests.values()):
+                raise DebuggerError("backend_busy", "A debugger attach has not completed.")
+            if self._client is None:
+                return
+            backend = await self._backend()
+            for sid, (rid, _) in list(self._sessions.items()):
+                if rid != runtime_id:
+                    continue
+                try:
+                    state = await backend.request("get_debug_state", {"session_id": sid})
+                    if state["connection_state"] == "connected":
+                        await backend.request("detach_debugger", {"session_id": sid})
+                except DebuggerError as error:
+                    if error.code not in {"session_not_found", "vm_disconnected", "vm_terminated"}:
+                        raise
+
     async def close(self) -> None:
         if self._closed:
             return

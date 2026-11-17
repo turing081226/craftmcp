@@ -294,7 +294,7 @@ class PluginTests(unittest.TestCase):
 @unittest.skipUnless(os.environ.get("CRAFTMCP_REAL_BUILD") == "1", "opt-in real Gradle build")
 class RealBuildTests(unittest.TestCase):
     def test_manifest_resources_debug_tables_and_failed_rebuild(self):
-        service = PluginService(ROOT)
+        service = PluginService(ROOT, java_executable=os.environ.get("CRAFTMCP_TEST_JAVA", "java"))
         outcome = service.build("CBuildProbe", "local.Probe", {"local/Probe.java": SOURCE},
                                 plugin_manifest={"version": "1.2.3", "commands": {"cprobe": {"description": "test"}},
                                                  "permissions": {"cprobe.use": {"default": "op"}}},

@@ -6,3 +6,9 @@ commands:
   craftdebug:
     description: Deterministic console-only debugger reproduction
     usage: craftdebug calculate <run_id> <base> <bonus>
+  craftdebugrcon:
+    description: Deterministic remote-console-only integration fixture
+    usage: craftdebugrcon calculate <run_id> <base> <bonus>
+  craftmcpstatus:
+    description: Exact remote-console-only plugin status for integration tests
+    usage: craftmcpstatus <plugin_name>
