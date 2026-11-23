@@ -1,0 +1,68 @@
+# MarvelHeroes 설정
+
+resource-pack:
+  # 접속한 플레이어에게 아이언맨 텍스처 리소스팩을 보낸다.
+  enabled: true
+  # 플러그인이 내장 HTTP 서버로 리소스팩을 직접 제공한다. 비워 두면 내장 서버를 쓴다.
+  # 외부에 올린 zip 주소를 쓰려면 여기에 URL을 적는다(해시는 jar 내장 팩 기준이므로 같은 파일이어야 함).
+  url: ""
+  # 내장 HTTP 서버 포트와, 클라이언트가 접속할 주소(같은 PC면 127.0.0.1, LAN이면 서버 PC의 IP).
+  port: 8765
+  public-host: 127.0.0.1
+  # true면 리소스팩을 거절한 플레이어를 서버에서 내보낸다.
+  force: false
+
+repulsor:
+  cooldown-ms: 350
+  # 블록/틱
+  speed: 1.8
+  # 최대 비행 시간(틱). speed x max-ticks = 사거리
+  max-ticks: 40
+  explosion-power: 2.0
+  break-blocks: false
+  set-fire: false
+
+flight:
+  # 스페이스 2번으로 이륙할 때 위쪽 속도
+  launch-power: 1.3
+  # 비행 중 스페이스 2번으로 바라보는 방향 가속
+  boost-power: 1.7
+  boost-cooldown-ms: 600
+  # 이륙 후 활공으로 전환할 때까지의 틱
+  glide-delay-ticks: 7
+  # 8번 칸 추진기(비행 중 우클릭) = 겉날개 폭죽 가속. 폭죽 체공 시간 1~3 (클수록 오래 가속)
+  thruster-power: 2
+  thruster-cooldown-ms: 500
+  # 비행 세션 중 및 착지 직후 낙하/벽 충돌 피해 무시
+  negate-fall-damage: true
+
+# 스파이더맨: 가죽 갑옷 4종(색 무관)을 모두 입으면 적용
+spiderman:
+  # 근접 공격(휩쓸기 포함) 피해 배율
+  attack-multiplier: 4.0
+  # 벽을 바라보면 오르는 속도(블록/틱)
+  climb-speed: 0.22
+  web:
+    # 거미줄 속도(블록/틱)와 최대 비행 시간(틱). 2.5 x 16 = 사거리 40블록
+    speed: 2.5
+    max-ticks: 16
+    cooldown-ms: 300
+    # 붙은 거미줄이 유지되는 시간과 최대 길이
+    attach-seconds: 15
+    max-length: 48
+    # 엔티티를 끌어오는 속도 / 고정점으로 날아가는 속도(블록/틱)
+    pull-speed: 1.2
+    zip-speed: 1.4
+
+# 토르: 묠니르(/kit thor)를 들고 우클릭 = 던지기, 다시 우클릭 = 되돌아오기
+thor:
+  # 날아가는 속도 / 돌아오는 속도(블록/틱)
+  throw-speed: 1.8
+  return-speed: 2.0
+  # 이 거리를 날아가면 그 자리에 멈춘다
+  max-distance: 40
+  # 맞은 몹이 받는 피해(던질 때·돌아올 때 각각)
+  damage: 10.0
+
+# true면 비행·거미줄·벽 타기·공격 배율 동작을 서버 로그에 남긴다(동작 확인용).
+debug: false

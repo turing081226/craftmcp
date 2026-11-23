@@ -1,0 +1,24 @@
+name: MarvelHeroes
+version: '${version}'
+main: local.craftmcp.marvel.MarvelHeroesPlugin
+api-version: '1.20'
+description: Marvel hero suits. Iron Man (iron armor), Spider-Man (full leather armor), Thor (Mjolnir).
+commands:
+  kit:
+    description: Get a hero suit
+    usage: /kit <ironman|spiderman|thor> [player]
+    permission: marvel.kit
+  marvelpack:
+    description: Resend the hero texture resource pack
+    usage: /marvelpack
+    permission: marvel.pack
+permissions:
+  marvel.kit:
+    description: Use /kit <hero> for yourself
+    default: true
+  marvel.kit.others:
+    description: Use /kit <hero> <player>
+    default: op
+  marvel.pack:
+    description: Use /marvelpack
+    default: true

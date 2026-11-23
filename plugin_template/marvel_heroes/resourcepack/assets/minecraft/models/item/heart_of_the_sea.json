@@ -1,0 +1,7 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": { "layer0": "minecraft:item/heart_of_the_sea" },
+  "overrides": [
+    { "predicate": { "custom_model_data": 7001 }, "model": "marvel:item/repulsor" }
+  ]
+}
