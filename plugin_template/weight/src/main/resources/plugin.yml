@@ -1,0 +1,6 @@
+﻿name: WeightMovement
+version: 1.0.0
+main: local.craftmcp.weight.WeightMovementPlugin
+api-version: '1.20'
+author: CraftMCP
+description: Equipment weight changes player movement speed.
